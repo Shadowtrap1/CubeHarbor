@@ -1,0 +1,6 @@
+/target
+*.cubeharbor-part
+
+# Local smoke-test folders from the README
+/data/
+/etc/

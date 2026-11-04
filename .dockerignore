@@ -1,0 +1,6 @@
+target
+.git
+charts
+examples
+*.md
+!examples/site.yaml

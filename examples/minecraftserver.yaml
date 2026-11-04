@@ -1,0 +1,22 @@
+# The raw custom resource (what compose files and the dashboard produce).
+apiVersion: cubeharbor.dev/v1alpha1
+kind: MinecraftServer
+metadata:
+  name: survival
+  namespace: cubeharbor
+spec:
+  acceptEula: true
+  modpack:
+    modrinth:
+      project: cobblemon-fabric
+  resources:
+    memory: 8Gi
+    storage: 30Gi
+  routing:
+    hostnames: [survival.mc.example.com]
+  voice:
+    kind: simple-voice-chat
+  geyser: {}
+  autoSleep:
+    idleMinutes: 15
+  ops: [Steve]

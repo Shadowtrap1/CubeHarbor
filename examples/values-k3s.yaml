@@ -1,0 +1,29 @@
+# Example Helm values for a home-lab k3s cluster (ServiceLB / klipper-lb).
+minecraft:
+  acceptEula: true
+  baseDomain: mc.example.com      # wildcard DNS *.mc.example.com -> any node IP
+  portRange: "25600-25649"
+  storageClass: local-path
+
+curseforge:
+  apiKey: ""                      # needed for CurseForge packs
+
+cache:
+  enabled: false                  # needs a ReadWriteMany storage class (NFS, Longhorn RWX...)
+
+gateway:
+  service:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+
+dashboard:
+  ingress:
+    enabled: true
+    className: traefik
+    host: cubeharbor.example.com
+    # Always serve the dashboard over TLS: the password and session cookie cross this connection.
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt   # or any issuer you run
+    tls:
+      - hosts: [cubeharbor.example.com]
+        secretName: cubeharbor-dashboard-tls

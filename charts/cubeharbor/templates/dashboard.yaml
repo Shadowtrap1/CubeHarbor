@@ -1,0 +1,196 @@
+{{- if .Values.dashboard.enabled }}
+{{- $fullname := include "cubeharbor.fullname" . -}}
+{{- $secretName := .Values.dashboard.existingSecret | default (printf "%s-dashboard" $fullname) -}}
+{{- if not .Values.dashboard.existingSecret }}
+{{- $password := .Values.dashboard.password -}}
+{{- $session := randAlphaNum 32 -}}
+{{- with lookup "v1" "Secret" .Release.Namespace $secretName }}
+{{- if not $password }}{{ $password = index .data "password" | b64dec }}{{ end }}
+{{- $session = index .data "sessionSecret" | default ($session | b64enc) | b64dec }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+type: Opaque
+data:
+  password: {{ $password | default (randAlphaNum 24) | b64enc | quote }}
+  sessionSecret: {{ $session | b64enc | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-dashboard-site
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+data:
+  site.yaml: |
+    {{- toYaml (.Values.dashboard.site | default dict) | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-dashboard
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+{{- $nsList := include "cubeharbor.dashboardNamespaces" . | splitList "," }}
+{{- $all := has "*" .Values.dashboard.allowedNamespaces }}
+---
+# Listing servers is cluster-wide (the UI filters to its namespaces). Writes, RCON secrets,
+# logs and volumes are granted per namespace, unless dashboard.allowedNamespaces contains "*".
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-dashboard
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [cubeharbor.dev]
+    resources: [minecraftservers]
+    verbs: [get, list, watch]
+{{- if $all }}
+{{ include "cubeharbor.dashboardRules" . }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-dashboard
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-dashboard
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-dashboard
+    namespace: {{ .Release.Namespace }}
+{{- if not $all }}
+{{- range $ns := $nsList }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-dashboard
+  namespace: {{ $ns }}
+  labels: {{- include "cubeharbor.labels" $ | nindent 4 }}
+rules:
+{{ include "cubeharbor.dashboardRules" $ }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-dashboard
+  namespace: {{ $ns }}
+  labels: {{- include "cubeharbor.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-dashboard
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-dashboard
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-dashboard
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
+      app.kubernetes.io/component: dashboard
+  template:
+    metadata:
+      labels: {{- include "cubeharbor.selector" . | nindent 8 }}
+        app.kubernetes.io/component: dashboard
+      annotations:
+        # Roll the dashboard when the site config changes.
+        checksum/site: {{ toYaml (.Values.dashboard.site | default dict) | sha256sum }}
+    spec:
+      serviceAccountName: {{ $fullname }}-dashboard
+      {{- include "cubeharbor.pod" . | nindent 6 }}
+      {{- include "cubeharbor.scheduling" .Values.dashboard | nindent 6 }}
+      containers:
+        - name: dashboard
+          image: {{ include "cubeharbor.image" (dict "root" . "name" "dashboard") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "cubeharbor.containerSecurity" . | nindent 10 }}
+          env:
+            - { name: LISTEN_ADDR, value: {{ include "cubeharbor.listen" (dict "root" . "port" 8080) | quote }} }
+            - name: DASHBOARD_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $secretName }}, key: password } }
+            - name: SESSION_SECRET
+              valueFrom: { secretKeyRef: { name: {{ $secretName }}, key: sessionSecret, optional: true } }
+            - { name: DEFAULT_NAMESPACE, value: {{ .Values.dashboard.defaultNamespace | default .Release.Namespace | quote }} }
+            - { name: BASE_DOMAIN, value: {{ .Values.minecraft.baseDomain | quote }} }
+            - { name: PUBLIC_HOST, value: {{ .Values.minecraft.publicHost | quote }} }
+            - { name: PUBLIC_MINECRAFT_PORT, value: {{ ternary .Values.mcRouter.service.port .Values.gateway.service.port (eq .Values.router.mode "mc-router") | quote }} }
+            - name: REMOTES
+              value: {{ include "cubeharbor.remotes" . | quote }}
+            - { name: CORS_ORIGINS, value: {{ join "," .Values.dashboard.corsOrigins | quote }} }
+            - { name: PUBLIC_SERVER_LIST, value: {{ .Values.dashboard.publicServerList | quote }} }
+            - { name: ALLOWED_NAMESPACES, value: {{ ternary "*" (include "cubeharbor.dashboardNamespaces" .) $all | quote }} }
+            - { name: COOKIE_SECURE, value: {{ .Values.dashboard.cookieSecure | default (and .Values.dashboard.ingress.enabled (not (empty .Values.dashboard.ingress.tls))) | quote }} }
+            - { name: SITE_CONFIG, value: /etc/cubeharbor-dashboard/site.yaml }
+            {{- include "cubeharbor.curseforgeEnv" . | nindent 12 }}
+          volumeMounts:
+            - { name: site, mountPath: /etc/cubeharbor-dashboard, readOnly: true }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources: {{- toYaml .Values.dashboard.resources | nindent 12 }}
+      volumes:
+        - name: site
+          configMap: { name: {{ $fullname }}-dashboard-site }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-dashboard
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  type: {{ .Values.dashboard.service.type }}
+  {{- include "cubeharbor.ipFamily" . | nindent 2 }}
+  selector: {{- include "cubeharbor.selector" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+  ports:
+    - { name: http, port: {{ .Values.dashboard.service.port }}, targetPort: http }
+{{- if .Values.dashboard.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}-dashboard
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+  {{- with .Values.dashboard.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.dashboard.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.dashboard.ingress.tls }}
+  tls: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.dashboard.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-dashboard
+                port: { name: http }
+{{- end }}
+{{- end }}

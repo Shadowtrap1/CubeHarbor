@@ -1,0 +1,69 @@
+# Dashboard site config: every option with its built-in default.
+#
+# All keys are optional. Copy only what you want to change, either under `dashboard.site` in your
+# Helm values or into a file passed as SITE_CONFIG / --site-config when running the dashboard
+# yourself. Unknown keys are rejected at startup, so typos don't go unnoticed.
+
+# Name in the header, page titles and the login page.
+name: cubeharbor
+# Text or emoji shown before the name ("" hides it).
+icon: "⛏"
+# Image shown instead of the icon (URL or data: URI).
+logoUrl: ""
+# Browser tab icon (URL or data: URI).
+faviconUrl: ""
+# Small text at the bottom of every page ("" hides it).
+footer: ""
+
+# CSS variable overrides, without the leading `--`. Defaults and the full list are at the top of
+# crates/dashboard/assets/style.css:
+#   bg panel line text muted accent warn err info
+#   input-bg log-bg button-border
+#   running-bg pending-bg error-bg idle-bg
+#   primary-bg primary-border danger-bg danger-border
+#   warn-note-bg error-note-bg
+#   font font-mono font-size max-width radius
+theme: {}
+#  accent: "#7c5cff"
+#  bg: "#101014"
+#  font: "Inter, system-ui, sans-serif"
+
+# Extra CSS appended after the built-in stylesheet.
+customCss: ""
+
+# Extra header links after the built-in ones.
+links: []
+#  - { label: Map, url: https://map.example.com, newTab: true }
+
+# Seconds between server list refreshes (0 turns auto refresh off).
+refreshSeconds: 5
+
+console:
+  # Log lines loaded when the console opens.
+  tailLines: 500
+  # Lines kept in the browser before the oldest are dropped.
+  maxLines: 4000
+
+# "New server" page.
+newServer:
+  memoryOptions: [2Gi, 4Gi, 6Gi, 8Gi, 10Gi, 12Gi, 16Gi, 20Gi, 24Gi, 32Gi]
+  memory: 8Gi                 # preselected
+  storage: 20Gi               # placeholder of the disk field
+  autoSleepMinutes: 0         # 0 = never
+  voice: false                # "Proximity voice chat" checked by default
+  geyser: false               # "Bedrock cross-play" checked by default
+  searchResults: 12           # modpack search results per query
+  # Entries of the "Type" select, in order. `value` is `modpack` or a loader name.
+  types:
+    - { value: modpack, label: Modpack }
+    - { value: paper, label: Paper (plugins) }
+    - { value: purpur, label: Purpur (plugins) }
+    - { value: fabric, label: Fabric }
+    - { value: neoforge, label: NeoForge }
+    - { value: forge, label: Forge }
+    - { value: quilt, label: Quilt }
+    - { value: vanilla, label: Vanilla }
+  # Text in the compose editor when the page opens. Default: crates/dashboard/assets/example-compose.yaml
+  # exampleCompose: |
+  #   servers:
+  #     survival: { loader: paper, acceptEula: true }

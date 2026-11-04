@@ -1,0 +1,49 @@
+# cubeharbor compose: a whole network in one file.
+#   cubeharbor render examples/network.yaml      # see the generated MinecraftServer resources
+#   cubeharbor apply  examples/network.yaml      # or paste it into the dashboard
+name: friends-network
+namespace: cubeharbor
+
+defaults:
+  acceptEula: true            # https://aka.ms/MinecraftEULA
+  memory: 6Gi
+  autoSleep: 20               # stop after 20 idle minutes; the gateway wakes it on join
+
+servers:
+  lobby:
+    loader: paper
+    version: "1.21.4"
+    memory: 3Gi
+    autoSleep: false
+    routing: { default: true }          # unknown hostnames land here
+    plugins: [luckperms, chunky]
+    voice: true                         # Simple Voice Chat, port auto-allocated + configured
+    geyser: true                        # Bedrock players via Geyser + Floodgate
+
+  # Large CurseForge pack: uses the author's server pack when available.
+  atm10:
+    modpack: curseforge:all-the-mods-10
+    memory: 14Gi
+    storage: 60Gi
+    voice: simple-voice-chat
+    hostname: atm.mc.example.com
+    jvm: { extraArgs: ["-XX:+UseStringDeduplication"] }
+
+  # Modrinth pack pinned to a version, plus extra mods (dependencies resolved automatically).
+  cobblemon:
+    modpack: modrinth:cobblemon-fabric@1.8.4
+    mods: [chunky, "spark"]
+    ops: [Steve]
+    properties:
+      difficulty: hard
+      view-distance: 12
+    ports:
+      - "bluemap:8100@map.mc.example.com"   # web map through an Ingress
+
+  # A pack that ships a client-only mod the metadata gets wrong: exclude it by file name.
+  create:
+    modpack:
+      modrinth: { project: create_plus }
+      exclude: [some-client-mod]
+      include: [radiantgear]          # keep something the client-only detector would drop
+    memory: 8Gi

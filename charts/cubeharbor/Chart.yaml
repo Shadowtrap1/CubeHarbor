@@ -1,0 +1,14 @@
+apiVersion: v2
+name: cubeharbor
+description: Minecraft servers on Kubernetes — Rust operator, hostname gateway with voice-chat/Bedrock port management, and a dashboard that builds servers from modpacks and compose files.
+type: application
+# persistentVolumeClaimRetentionPolicy on StatefulSets is on by default from 1.27.
+kubeVersion: ">=1.27.0-0"
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [minecraft, modpacks, operator, gameserver, voice-chat]
+home: https://github.com/Shadowtrap1/cubeharbor
+sources: [https://github.com/Shadowtrap1/cubeharbor]
+maintainers:
+  - name: Shadowtrap1
+    url: https://github.com/Shadowtrap1

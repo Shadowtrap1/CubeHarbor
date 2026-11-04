@@ -1,0 +1,127 @@
+{{- $fullname := include "cubeharbor.fullname" . -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-gateway
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-gateway
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+rules:
+  # Read routes; patch is only used to set the wake-up annotation when a player joins.
+  - apiGroups: [cubeharbor.dev]
+    resources: [minecraftservers]
+    verbs: [get, list, watch, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-gateway
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-gateway
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-gateway
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-gateway
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  {{- if .Values.gateway.hostNetwork }}
+  strategy: { type: Recreate }
+  {{- end }}
+  selector:
+    matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels: {{- include "cubeharbor.selector" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+    spec:
+      serviceAccountName: {{ $fullname }}-gateway
+      {{- if .Values.gateway.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- include "cubeharbor.pod" . | nindent 6 }}
+      {{- include "cubeharbor.scheduling" .Values.gateway | nindent 6 }}
+      containers:
+        - name: gateway
+          image: {{ include "cubeharbor.image" (dict "root" . "name" "gateway") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "cubeharbor.containerSecurity" . | nindent 10 }}
+          {{- if .Values.gateway.hostNetwork }}
+          # Binding 25565 needs no privileges, but keep the option for <1024 ports.
+          {{- end }}
+          env:
+            - { name: LISTEN_ADDR, value: {{ include "cubeharbor.listen" (dict "root" . "port" 25565) | quote }} }
+            - { name: HEALTH_ADDR, value: {{ include "cubeharbor.listen" (dict "root" . "port" 8081) | quote }} }
+            - { name: PORTS_BIND, value: {{ .Values.network.bindAddress | default "0.0.0.0" | quote }} }
+            - { name: WATCH_NAMESPACE, value: {{ .Values.minecraft.watchNamespace | quote }} }
+            - { name: ACCEPT_PROXY_PROTOCOL, value: {{ .Values.gateway.acceptProxyProtocol | quote }} }
+            - { name: TRUSTED_PROXIES, value: {{ join "," .Values.gateway.trustedProxies | quote }} }
+          ports:
+            - { name: minecraft, containerPort: 25565, protocol: TCP }
+            - { name: health, containerPort: 8081, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /healthz, port: health }
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 20
+          resources: {{- toYaml .Values.gateway.resources | nindent 12 }}
+{{- if and (not .Values.gateway.hostNetwork) (ne .Values.router.mode "mc-router") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-gateway
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  {{- with .Values.gateway.service.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.gateway.service.type }}
+  {{- include "cubeharbor.ipFamily" . | nindent 2 }}
+  {{- if ne .Values.gateway.service.type "ClusterIP" }}
+  externalTrafficPolicy: {{ .Values.gateway.service.externalTrafficPolicy }}
+  {{- end }}
+  {{- with .Values.gateway.service.loadBalancerIP }}
+  loadBalancerIP: {{ . }}
+  {{- end }}
+  selector: {{- include "cubeharbor.selector" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  ports:
+    - name: minecraft
+      port: {{ .Values.gateway.service.port }}
+      targetPort: minecraft
+      protocol: TCP
+      {{- if and (eq .Values.gateway.service.type "NodePort") .Values.gateway.service.nodePort }}
+      nodePort: {{ .Values.gateway.service.nodePort }}
+      {{- end }}
+{{- end }}
+{{- if and .Values.gateway.pdb.enabled (gt (int .Values.gateway.replicas) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-gateway
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  minAvailable: {{ .Values.gateway.pdb.minAvailable }}
+  selector:
+    matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+{{- end }}

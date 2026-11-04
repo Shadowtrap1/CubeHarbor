@@ -1,0 +1,24 @@
+[package]
+name = "cubeharbor-installer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Init container that installs Minecraft servers, loaders, modpacks and mods"
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+cubeharbor-core.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+reqwest.workspace = true
+zip = { version = "9", default-features = false, features = ["deflate"] }
+sha1 = "0.11"
+sha2 = "0.11"
+md-5 = "0.11"

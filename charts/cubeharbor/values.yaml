@@ -1,0 +1,234 @@
+# -- Image registry/prefix for all cubeharbor images.
+image:
+  registry: ghcr.io/shadowtrap1
+  # -- Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# -- Pod securityContext of the operator, gateway, dashboard and mc-router pods.
+# On OpenShift set this to {} so the restricted SCC assigns the UID.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile: { type: RuntimeDefault }
+
+network:
+  # -- Address every component listens on: "0.0.0.0" (IPv4) or "::" (IPv6-only and dual-stack clusters).
+  bindAddress: "0.0.0.0"
+  # -- ipFamilyPolicy for every Service, including the gateway ports Service
+  # (SingleStack, PreferDualStack, RequireDualStack). Cluster default when empty.
+  ipFamilyPolicy: ""
+  # -- ipFamilies for every Service, e.g. [IPv4, IPv6]. Cluster default when empty.
+  ipFamilies: []
+
+# -- Pod settings for every Minecraft server the operator creates. Use these to run servers on
+# dedicated or tainted game nodes, pull from a private registry, or fit a platform's rules.
+serverPods:
+  # -- Added to the global imagePullSecrets (which server pods also get).
+  imagePullSecrets: []
+  # -- Merged with each server's spec.nodeSelector (the server wins), e.g. { kubernetes.io/arch: amd64 }.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+  runtimeClassName: ""
+  labels: {}
+  annotations: {}
+  # -- Replaces the server pod securityContext. null = built-in (uid/gid 1000, Pod Security
+  # "restricted"). {} on OpenShift, so the restricted SCC assigns the UID.
+  securityContext: null
+
+minecraft:
+  # -- Accept the Minecraft EULA (https://aka.ms/MinecraftEULA) for every server by default.
+  # Servers can still set `acceptEula` individually.
+  acceptEula: false
+  # -- Servers get `<name>.<baseDomain>` as their address unless they set routing.hostnames.
+  # Point a wildcard DNS record (*.mc.example.com) at the gateway.
+  baseDomain: ""
+  # -- Hostname/IP players use for voice chat and Bedrock ports. Defaults to baseDomain.
+  publicHost: ""
+  # -- Public port pool for voice chat, Bedrock and other extra ports.
+  portRange: "25600-25699"
+  # -- Default storage class for world volumes (cluster default when empty).
+  storageClass: ""
+  # -- Parallel downloads when installing modpacks.
+  downloadConcurrency: 16
+  # -- CPU request of servers that don't set resources.cpu. Lower it on small clusters
+  # (Raspberry Pi, single node); "0" sets no request.
+  defaultCpuRequest: 500m
+  # -- Only manage servers in this namespace (empty = all namespaces).
+  watchNamespace: ""
+  # -- Ingress class for HTTP extra ports (web maps).
+  ingressClass: ""
+  # -- Domains servers may claim for `expose: ingress` ports (default: baseDomain; any host when
+  # both are empty). The dashboard's own host is always refused.
+  ingressHostSuffixes: []
+  # -- Let `spec.image` replace the cubeharbor server image. Off by default: anyone who can edit a
+  # server could otherwise run arbitrary images in its namespace.
+  allowImageOverride: false
+  # -- With allowImageOverride, accept only images starting with one of these (empty = any).
+  allowedImagePrefixes: []
+  # -- Per-server NetworkPolicy: game and extra ports stay open, RCON only from the dashboard.
+  # Needs a CNI that enforces NetworkPolicy (k3s does by default).
+  rconNetworkPolicy: true
+
+curseforge:
+  # -- CurseForge API key (https://console.curseforge.com). Required for CurseForge modpacks.
+  apiKey: ""
+  # -- Or reference an existing secret with key `apiKey`.
+  existingSecret: ""
+
+# -- Shared download cache (ReadWriteMany). Speeds up installing the same large modpack on several servers.
+cache:
+  enabled: false
+  size: 50Gi
+  storageClass: ""
+  accessMode: ReadWriteMany
+
+operator:
+  # -- Must be 1: port allocation is coordinated inside the operator process.
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+  logLevel: info
+
+router:
+  # -- Who routes Java players by hostname: `gateway` (cubeharbor-gateway, also answers pings for
+  # sleeping servers) or `mc-router` (itzg/mc-router reading Service annotations). With
+  # mc-router the gateway still forwards voice chat / Bedrock / extra ports.
+  mode: gateway
+
+mcRouter:
+  # -- Pinned for reproducible installs; bump deliberately (https://github.com/itzg/mc-router/releases).
+  image: itzg/mc-router:1.54.2
+  # -- Start a sleeping server when a player joins (scales its StatefulSet 0 -> 1).
+  autoScaleUp: true
+  connectionRateLimit: ""
+  extraEnv: []
+  service:
+    type: LoadBalancer
+    # -- Public Java port. Use something other than 25565 when another router already owns it.
+    port: 25565
+    # -- Node port for the Java port when type is NodePort.
+    nodePort: null
+    externalTrafficPolicy: Local
+    annotations: {}
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { memory: 128Mi }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+gateway:
+  # -- More than one replica is supported; players are spread by the load balancer.
+  replicas: 1
+  # -- PodDisruptionBudget, created when replicas > 1 so node drains keep one gateway up.
+  pdb:
+    enabled: true
+    minAvailable: 1
+  # -- Bind directly on node ports instead of using a LoadBalancer (bare metal without a LB).
+  hostNetwork: false
+  service:
+    type: LoadBalancer
+    port: 25565
+    # -- Node port for the Java port when type is NodePort.
+    nodePort: null
+    annotations: {}
+    # -- Local preserves player IPs.
+    externalTrafficPolicy: Local
+    loadBalancerIP: ""
+  # -- Set when the load balancer in front sends PROXY protocol.
+  acceptProxyProtocol: false
+  # -- CIDRs of those load balancers. PROXY headers from other peers are ignored, so players
+  # can't spoof their IP. Empty = trust any peer (only safe if nothing else can reach the gateway).
+  trustedProxies: []
+  resources:
+    requests: { cpu: 50m, memory: 32Mi }
+    limits: { memory: 256Mi }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+dashboard:
+  enabled: true
+  # -- Login password. Generated (and kept across upgrades) when empty.
+  password: ""
+  existingSecret: ""
+  # -- Namespace for servers created from the dashboard (release namespace when empty).
+  defaultNamespace: ""
+  # -- Extra namespaces the dashboard may manage (RBAC is granted per namespace). `["*"]` grants
+  # cluster-wide access, including get on every Secret: avoid unless you need it.
+  allowedNamespaces: []
+  # -- Mark the session cookie Secure. Defaults to on when the dashboard Ingress has TLS.
+  cookieSecure: false
+  # -- Other setups shown on the dashboard and in /api/v1/servers (read-only).
+  # Each url returns a server list: games-dashboard /api/servers or another cubeharbor /api/v1/servers.
+  remotes: []
+  #  - name: games
+  #    url: https://games.example.com/api/servers
+  # -- Browser origins allowed to call /api (central dashboards on another host). `*` allows any.
+  corsOrigins: []
+  # -- Serve GET /api/v1/servers without logging in (for public status pages).
+  publicServerList: false
+  # -- Branding, theme and form defaults of the dashboard. Every key is optional; anything left
+  # out keeps the built-in default. All options with their defaults: examples/site.yaml.
+  site: {}
+  #  name: Blockhaus
+  #  icon: "🧱"
+  #  logoUrl: https://example.com/logo.svg
+  #  faviconUrl: https://example.com/favicon.png
+  #  footer: "Run by the Blockhaus admins"
+  #  theme: { accent: "#7c5cff", bg: "#101014", panel: "#18181f" }
+  #  customCss: "header { border-bottom-width: 2px }"
+  #  links:
+  #    - { label: Map, url: https://map.example.com, newTab: true }
+  #  refreshSeconds: 5
+  #  newServer:
+  #    memory: 6Gi
+  #    memoryOptions: [4Gi, 6Gi, 8Gi, 12Gi, 16Gi]
+  #    autoSleepMinutes: 20
+  #    voice: true
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: false
+    className: ""
+    host: cubeharbor.example.com
+    annotations: {}
+    tls: []
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { memory: 256Mi }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+# -- MinecraftServer resources to create with the release (full spec, see examples/).
+servers: {}
+#  lobby:
+#    loader: paper
+#    version: "1.21.4"
+#    resources: { memory: 4Gi }
+#    voice: { kind: simple-voice-chat }
+#  atm10:
+#    modpack:
+#      curseforge: { project: all-the-mods-10 }
+#    resources: { memory: 14Gi, storage: 40Gi }
+#    autoSleep: { idleMinutes: 20 }

@@ -1,0 +1,123 @@
+{{- if eq .Values.router.mode "mc-router" }}
+{{- $fullname := include "cubeharbor.fullname" . -}}
+{{- $ns := .Values.minecraft.watchNamespace -}}
+# itzg/mc-router routes Java connections by hostname. It only reads Services in the watched
+# namespace that the operator annotated with mc-router.itzg.me/externalServerName, so it never
+# sees routes belonging to other setups on the same cluster.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-mc-router
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ if $ns }}Role{{ else }}ClusterRole{{ end }}
+metadata:
+  name: {{ $fullname }}-mc-router
+  {{- if $ns }}
+  namespace: {{ $ns }}
+  {{- end }}
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch]
+  {{- if .Values.mcRouter.autoScaleUp }}
+  # Wake-on-join: scale a sleeping server's StatefulSet 0 -> 1; the operator notices and marks it awake.
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [statefulsets/scale]
+    verbs: [get, update, patch]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ if $ns }}RoleBinding{{ else }}ClusterRoleBinding{{ end }}
+metadata:
+  name: {{ $fullname }}-mc-router
+  {{- if $ns }}
+  namespace: {{ $ns }}
+  {{- end }}
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: {{ if $ns }}Role{{ else }}ClusterRole{{ end }}
+  name: {{ $fullname }}-mc-router
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-mc-router
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-mc-router
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mc-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
+      app.kubernetes.io/component: mc-router
+  template:
+    metadata:
+      labels: {{- include "cubeharbor.selector" . | nindent 8 }}
+        app.kubernetes.io/component: mc-router
+    spec:
+      serviceAccountName: {{ $fullname }}-mc-router
+      {{- include "cubeharbor.pod" . | nindent 6 }}
+      {{- include "cubeharbor.scheduling" .Values.mcRouter | nindent 6 }}
+      containers:
+        - name: mc-router
+          image: {{ .Values.mcRouter.image | quote }}
+          imagePullPolicy: IfNotPresent
+          {{- include "cubeharbor.containerSecurity" . | nindent 10 }}
+          args: ["--in-kube-cluster"]
+          env:
+            - { name: KUBE_NAMESPACE, value: {{ $ns | quote }} }
+            - { name: PORT, value: "25565" }
+            - { name: API_BINDING, value: ":8080" }
+            - { name: AUTO_SCALE_UP, value: {{ .Values.mcRouter.autoScaleUp | quote }} }
+            {{- with .Values.mcRouter.connectionRateLimit }}
+            - { name: CONNECTION_RATE_LIMIT, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.mcRouter.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - { name: minecraft, containerPort: 25565, protocol: TCP }
+            - { name: api, containerPort: 8080, protocol: TCP }
+          readinessProbe:
+            tcpSocket: { port: minecraft }
+          livenessProbe:
+            tcpSocket: { port: minecraft }
+            periodSeconds: 20
+          resources: {{- toYaml .Values.mcRouter.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-mc-router
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mc-router
+  {{- with .Values.mcRouter.service.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.mcRouter.service.type }}
+  {{- include "cubeharbor.ipFamily" . | nindent 2 }}
+  {{- if ne .Values.mcRouter.service.type "ClusterIP" }}
+  externalTrafficPolicy: {{ .Values.mcRouter.service.externalTrafficPolicy }}
+  {{- end }}
+  selector: {{- include "cubeharbor.selector" . | nindent 4 }}
+    app.kubernetes.io/component: mc-router
+  ports:
+    - name: minecraft
+      port: {{ .Values.mcRouter.service.port }}
+      targetPort: minecraft
+      protocol: TCP
+      {{- if and (eq .Values.mcRouter.service.type "NodePort") .Values.mcRouter.service.nodePort }}
+      nodePort: {{ .Values.mcRouter.service.nodePort }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,43 @@
+# Use itzg/mc-router for Java hostname routing instead of the cubeharbor gateway. Players connect
+# on the standard Minecraft port 25565. The gateway still forwards voice chat, Bedrock and extra ports.
+#
+#   helm upgrade --install cubeharbor charts/cubeharbor -n cubeharbor --create-namespace -f examples/values-mc-router.yaml
+#
+# Already running something on 25565 on the same machine? Give mcRouter.service.port another
+# port (e.g. 25566) and a portRange that doesn't overlap. Players then add `:<port>` to the address,
+# unless you publish SRV records.
+minecraft:
+  acceptEula: true
+  baseDomain: mc.example.com          # DNS: *.mc.example.com -> the mc-router / gateway address
+  portRange: "25600-25699"            # public ports for voice chat / Bedrock
+  watchNamespace: cubeharbor           # never touch MinecraftServers or Services elsewhere
+
+router:
+  mode: mc-router
+
+mcRouter:
+  # Pin a digest in production, e.g. docker.io/itzg/mc-router@sha256:...
+  image: itzg/mc-router:1.54.2
+  autoScaleUp: true
+  connectionRateLimit: "2"
+  service:
+    type: LoadBalancer
+    port: 25565                       # the standard Minecraft Java port
+
+dashboard:
+  defaultNamespace: cubeharbor
+  # Optional: show servers of another setup next to cubeharbor's (read-only, from its public list).
+  remotes:
+    - name: games
+      url: https://games.example.com/api/servers
+  corsOrigins: []                     # e.g. ["https://status.example.com"] for a central page
+  ingress:
+    enabled: true
+    className: ""                     # your ingress controller's class (cluster default when empty)
+    host: cubeharbor.example.com
+    # Always serve the dashboard over TLS: the password and session cookie cross this connection.
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt   # or any issuer you run
+    tls:
+      - hosts: [cubeharbor.example.com]
+        secretName: cubeharbor-dashboard-tls

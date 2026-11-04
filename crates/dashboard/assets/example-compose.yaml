@@ -1,0 +1,23 @@
+# cubeharbor compose — one file, a whole network.
+name: my-network
+defaults:
+  acceptEula: true        # https://aka.ms/MinecraftEULA
+  memory: 6Gi
+  autoSleep: 20           # minutes without players before sleeping
+
+servers:
+  lobby:
+    loader: paper
+    version: "1.21.4"
+    plugins: [luckperms, simple-voice-chat]
+    voice: true
+
+  atm10:
+    modpack: curseforge:all-the-mods-10
+    memory: 14Gi
+    voice: true
+
+  cobblemon:
+    modpack: modrinth:cobblemon-fabric
+    memory: 8Gi
+    geyser: true          # Bedrock players welcome

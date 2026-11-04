@@ -1,0 +1,21 @@
+[package]
+name = "cubeharbor-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared types and clients for cubeharbor: MinecraftServer CRD, compose parser, Minecraft protocol, RCON, Mojang/Modrinth/CurseForge"
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+schemars.workspace = true
+kube.workspace = true
+k8s-openapi.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true

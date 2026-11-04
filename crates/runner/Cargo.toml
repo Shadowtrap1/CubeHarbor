@@ -1,0 +1,16 @@
+[package]
+name = "cubeharbor-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PID 1 of cubeharbor server containers: JVM sizing and clean shutdown"
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+cubeharbor-core.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true

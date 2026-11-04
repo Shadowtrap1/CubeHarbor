@@ -1,0 +1,39 @@
+{{- $fullname := include "cubeharbor.fullname" . -}}
+{{- if and .Values.curseforge.apiKey (not .Values.curseforge.existingSecret) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "cubeharbor.curseforgeSecret" . }}
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  apiKey: {{ .Values.curseforge.apiKey | quote }}
+---
+{{- end }}
+{{- if .Values.cache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-cache
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ .Values.cache.accessMode }}]
+  {{- with .Values.cache.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.cache.size }}
+---
+{{- end }}
+{{- range $name, $spec := .Values.servers }}
+apiVersion: cubeharbor.dev/v1alpha1
+kind: MinecraftServer
+metadata:
+  name: {{ $name }}
+  labels: {{- include "cubeharbor.labels" $ | nindent 4 }}
+spec: {{- toYaml $spec | nindent 2 }}
+---
+{{- end }}

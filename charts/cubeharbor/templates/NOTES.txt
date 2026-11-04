@@ -1,0 +1,37 @@
+cubeharbor is installed.
+
+{{- $fullname := include "cubeharbor.fullname" . }}
+
+{{- $mcr := eq .Values.router.mode "mc-router" }}
+{{- $port := ternary .Values.mcRouter.service.port .Values.gateway.service.port $mcr | int }}
+{{ if $mcr }}mc-router{{ else }}Gateway{{ end }} (Java players connect here, port {{ $port }}):
+  kubectl -n {{ .Release.Namespace }} get svc {{ $fullname }}-{{ ternary "mc-router" "gateway" $mcr }}
+{{- if .Values.minecraft.baseDomain }}
+  Point *.{{ .Values.minecraft.baseDomain }} at that address; servers answer on <name>.{{ .Values.minecraft.baseDomain }}{{ if ne $port 25565 }}:{{ $port }}{{ end }}.
+{{- if ne $port 25565 }}
+  To drop the port, add an SRV record per server: _minecraft._tcp.<name>.{{ .Values.minecraft.baseDomain }} -> <name>.{{ .Values.minecraft.baseDomain }}:{{ $port }}.
+{{- end }}
+{{- else }}
+  Tip: set minecraft.baseDomain so servers get automatic hostnames.
+{{- end }}
+  Voice chat / Bedrock ports appear on: kubectl -n {{ .Release.Namespace }} get svc {{ $fullname }}-gateway-ports
+
+{{- if .Values.dashboard.enabled }}
+
+Dashboard:
+{{- if .Values.dashboard.ingress.enabled }}
+  https://{{ .Values.dashboard.ingress.host }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullname }}-dashboard 8080:{{ .Values.dashboard.service.port }}
+{{- end }}
+  Password:
+  kubectl -n {{ .Release.Namespace }} get secret {{ .Values.dashboard.existingSecret | default (printf "%s-dashboard" $fullname) }} -o jsonpath='{.data.password}' | base64 -d; echo
+{{- end }}
+
+{{- if not .Values.minecraft.acceptEula }}
+
+NOTE: minecraft.acceptEula is false — each server must set `acceptEula: true` (https://aka.ms/MinecraftEULA).
+{{- end }}
+{{- if not (or .Values.curseforge.apiKey .Values.curseforge.existingSecret) }}
+NOTE: no CurseForge API key configured; CurseForge modpacks will not install (Modrinth works without one).
+{{- end }}

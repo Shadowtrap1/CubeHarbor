@@ -1,0 +1,20 @@
+[package]
+name = "cubeharbor-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Hostname-routing Minecraft gateway with wake-on-join and TCP/UDP port forwarding"
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+cubeharbor-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+futures.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+kube.workspace = true
+k8s-openapi.workspace = true

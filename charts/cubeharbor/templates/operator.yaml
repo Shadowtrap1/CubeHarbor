@@ -1,0 +1,147 @@
+{{- $fullname := include "cubeharbor.fullname" . -}}
+{{- if gt (int .Values.operator.replicas) 1 }}{{ fail "operator.replicas must be 1: port allocation is coordinated inside one operator process" }}{{ end -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-operator
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+{{- $watch := .Values.minecraft.watchNamespace }}
+{{- $workloadRules := include "cubeharbor.operatorWorkloadRules" . }}
+---
+# MinecraftServers are read cluster-wide (port allocation sees every server); everything the
+# operator creates is limited to the watched namespace when one is set.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-operator
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [cubeharbor.dev]
+    resources: [minecraftservers]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: [cubeharbor.dev]
+    resources: [minecraftservers/status]
+    verbs: [get, patch, update]
+{{- if not $watch }}
+{{ $workloadRules }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-operator
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-operator
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-operator
+    namespace: {{ .Release.Namespace }}
+{{- range $ns := (ternary (list $watch .Release.Namespace | uniq) (list .Release.Namespace) (ne $watch "")) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-operator
+  namespace: {{ $ns }}
+  labels: {{- include "cubeharbor.labels" $ | nindent 4 }}
+rules:
+{{- if eq $ns $watch }}
+{{ $workloadRules }}
+{{- else }}
+  # The gateway's allocated-ports Service lives in the release namespace.
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch, create, patch, update, delete]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-operator
+  namespace: {{ $ns }}
+  labels: {{- include "cubeharbor.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-operator
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-operator
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-operator
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  replicas: {{ .Values.operator.replicas }}
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
+      app.kubernetes.io/component: operator
+  template:
+    metadata:
+      labels: {{- include "cubeharbor.selector" . | nindent 8 }}
+        app.kubernetes.io/component: operator
+    spec:
+      serviceAccountName: {{ $fullname }}-operator
+      {{- include "cubeharbor.pod" . | nindent 6 }}
+      {{- include "cubeharbor.scheduling" .Values.operator | nindent 6 }}
+      containers:
+        - name: operator
+          image: {{ include "cubeharbor.image" (dict "root" . "name" "operator") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "cubeharbor.containerSecurity" . | nindent 10 }}
+          env:
+            - { name: METRICS_ADDR, value: {{ include "cubeharbor.listen" (dict "root" . "port" 8080) | quote }} }
+            - { name: DEFAULT_CPU_REQUEST, value: {{ .Values.minecraft.defaultCpuRequest | default "500m" | quote }} }
+            - { name: SERVER_POD_DEFAULTS, value: {{ include "cubeharbor.serverPodDefaults" . | quote }} }
+            - { name: GATEWAY_IP_FAMILY_POLICY, value: {{ .Values.network.ipFamilyPolicy | quote }} }
+            - { name: GATEWAY_IP_FAMILIES, value: {{ join "," (.Values.network.ipFamilies | default list) | quote }} }
+            - { name: RUST_LOG, value: {{ printf "%s,kube=warn" .Values.operator.logLevel | quote }} }
+            - { name: SERVER_IMAGE, value: {{ printf "%s/cubeharbor-server" .Values.image.registry | quote }} }
+            - { name: SERVER_IMAGE_TAG, value: {{ include "cubeharbor.tag" . | quote }} }
+            - { name: SERVER_IMAGE_PULL_POLICY, value: {{ .Values.image.pullPolicy | quote }} }
+            - { name: BASE_DOMAIN, value: {{ .Values.minecraft.baseDomain | quote }} }
+            - { name: PUBLIC_HOST, value: {{ .Values.minecraft.publicHost | quote }} }
+            - { name: PORT_RANGE, value: {{ .Values.minecraft.portRange | quote }} }
+            - { name: ACCEPT_EULA, value: {{ .Values.minecraft.acceptEula | quote }} }
+            - { name: DOWNLOAD_CONCURRENCY, value: {{ .Values.minecraft.downloadConcurrency | quote }} }
+            - { name: WATCH_NAMESPACE, value: {{ .Values.minecraft.watchNamespace | quote }} }
+            - { name: ROUTER, value: {{ .Values.router.mode | quote }} }
+            - { name: GATEWAY_NAMESPACE, value: {{ .Release.Namespace | quote }} }
+            - { name: GATEWAY_PORTS_SERVICE, value: {{ printf "%s-gateway-ports" $fullname | quote }} }
+            - { name: GATEWAY_SELECTOR, value: {{ printf "app.kubernetes.io/name=cubeharbor,app.kubernetes.io/instance=%s,app.kubernetes.io/component=gateway" .Release.Name | quote }} }
+            - { name: GATEWAY_SERVICE_TYPE, value: {{ ternary "ClusterIP" .Values.gateway.service.type .Values.gateway.hostNetwork | quote }} }
+            - { name: GATEWAY_SERVICE_ANNOTATIONS, value: {{ .Values.gateway.service.annotations | toJson | quote }} }
+            - { name: GATEWAY_EXTERNAL_TRAFFIC_POLICY, value: {{ .Values.gateway.service.externalTrafficPolicy | quote }} }
+            {{- with .Values.minecraft.storageClass }}
+            - { name: DEFAULT_STORAGE_CLASS, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.minecraft.ingressClass }}
+            - { name: INGRESS_CLASS, value: {{ . | quote }} }
+            {{- end }}
+            {{- if .Values.cache.enabled }}
+            - { name: CACHE_PVC, value: {{ printf "%s-cache" $fullname | quote }} }
+            - { name: CACHE_NAMESPACE, value: {{ .Release.Namespace | quote }} }
+            {{- end }}
+            - { name: ALLOW_IMAGE_OVERRIDE, value: {{ .Values.minecraft.allowImageOverride | quote }} }
+            - { name: ALLOWED_IMAGE_PREFIXES, value: {{ join "," .Values.minecraft.allowedImagePrefixes | quote }} }
+            - { name: INGRESS_HOST_SUFFIXES, value: {{ join "," .Values.minecraft.ingressHostSuffixes | quote }} }
+            - { name: RESERVED_HOSTS, value: {{ ternary .Values.dashboard.ingress.host "" (and .Values.dashboard.enabled .Values.dashboard.ingress.enabled) | quote }} }
+            - { name: RCON_NETWORK_POLICY, value: {{ .Values.minecraft.rconNetworkPolicy | quote }} }
+            - { name: DASHBOARD_NAMESPACE, value: {{ .Release.Namespace | quote }} }
+            - { name: DASHBOARD_SELECTOR, value: {{ printf "app.kubernetes.io/name=cubeharbor,app.kubernetes.io/instance=%s,app.kubernetes.io/component=dashboard" .Release.Name | quote }} }
+            {{- include "cubeharbor.curseforgeEnv" . | nindent 12 }}
+          ports:
+            - { name: health, containerPort: 8080 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 20
+          resources: {{- toYaml .Values.operator.resources | nindent 12 }}

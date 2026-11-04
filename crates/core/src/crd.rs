@@ -1,0 +1,618 @@
+//! The `MinecraftServer` custom resource.
+//!
+//! The spec describes *intent* (what to run); the operator resolves it into concrete
+//! versions, ports and Kubernetes objects and records the outcome in the status.
+
+use std::collections::BTreeMap;
+
+use kube::CustomResource;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+pub const GROUP: &str = "cubeharbor.dev";
+pub const MINECRAFT_PORT: u16 = 25565;
+pub const RCON_PORT: u16 = 25575;
+pub const SIMPLE_VOICE_CHAT_PORT: u16 = 24454;
+pub const PLASMO_VOICE_PORT: u16 = 60606;
+pub const GEYSER_PORT: u16 = 19132;
+
+#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
+#[kube(
+    group = "cubeharbor.dev",
+    version = "v1alpha1",
+    kind = "MinecraftServer",
+    namespaced,
+    status = "MinecraftServerStatus",
+    shortname = "mcs",
+    printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#,
+    printcolumn = r#"{"name":"Version","type":"string","jsonPath":".status.resolved.minecraftVersion"}"#,
+    printcolumn = r#"{"name":"Loader","type":"string","jsonPath":".status.resolved.loader"}"#,
+    printcolumn = r#"{"name":"Players","type":"integer","jsonPath":".status.players.online"}"#,
+    printcolumn = r#"{"name":"Address","type":"string","jsonPath":".status.hostnames[0]"}"#,
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
+)]
+#[serde(rename_all = "camelCase")]
+pub struct MinecraftServerSpec {
+    /// Minecraft version (e.g. `1.21.1`, `26.3`, `latest`). Optional when a modpack defines it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+
+    /// Server software. Inferred from the modpack when one is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loader: Option<Loader>,
+
+    /// Loader version (Fabric loader, Forge/NeoForge build, Paper build...). Defaults to the latest stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loader_version: Option<String>,
+
+    /// Install a modpack. Mod loader and Minecraft version are taken from the pack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modpack: Option<ModpackSource>,
+
+    /// Extra mods / plugins installed on top of the base server or modpack.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mods: Vec<ModRef>,
+
+    #[serde(default)]
+    pub resources: ServerResources,
+
+    #[serde(default)]
+    pub jvm: JvmSpec,
+
+    /// Accept the Minecraft EULA (https://aka.ms/MinecraftEULA). Falls back to the operator-wide default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept_eula: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motd: Option<String>,
+
+    /// Player names granted operator status.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ops: Vec<String>,
+
+    /// Player names allowed to join. Enables the whitelist when non-empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub whitelist: Vec<String>,
+
+    /// Raw `server.properties` overrides.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
+
+    /// Files written into the server directory on every start (path relative to the server root).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<FileSpec>,
+
+    #[serde(default)]
+    pub routing: RoutingSpec,
+
+    /// Proximity voice chat. Allocates a public UDP port and configures the mod automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<VoiceSpec>,
+
+    /// Bedrock cross-play through Geyser. Allocates a public UDP port and installs Geyser (+ Floodgate).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geyser: Option<GeyserSpec>,
+
+    /// Additional ports (web maps, query, custom plugins).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_ports: Vec<ExtraPort>,
+
+    /// Stop the server after a period without players. The gateway wakes it when someone joins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_sleep: Option<AutoSleepSpec>,
+
+    /// Scale the server to zero. Data is kept.
+    #[serde(default)]
+    pub paused: bool,
+
+    /// Extra environment variables for the server container.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+
+    /// Override the server image (normally picked from the required Java version).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub node_selector: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, JsonSchema, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum Loader {
+    #[default]
+    Vanilla,
+    Paper,
+    Purpur,
+    Fabric,
+    Quilt,
+    Forge,
+    NeoForge,
+}
+
+impl Loader {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Loader::Vanilla => "vanilla",
+            Loader::Paper => "paper",
+            Loader::Purpur => "purpur",
+            Loader::Fabric => "fabric",
+            Loader::Quilt => "quilt",
+            Loader::Forge => "forge",
+            Loader::NeoForge => "neoforge",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_ascii_lowercase().as_str() {
+            "vanilla" | "minecraft" => Loader::Vanilla,
+            "paper" | "papermc" => Loader::Paper,
+            "purpur" => Loader::Purpur,
+            "fabric" => Loader::Fabric,
+            "quilt" => Loader::Quilt,
+            "forge" => Loader::Forge,
+            "neoforge" | "neo-forge" | "neoforged" => Loader::NeoForge,
+            _ => return None,
+        })
+    }
+
+    /// Plugin servers load jars from `plugins/`, modded servers from `mods/`.
+    pub fn is_plugin_server(self) -> bool {
+        matches!(self, Loader::Paper | Loader::Purpur)
+    }
+
+    pub fn mods_dir(self) -> &'static str {
+        if self.is_plugin_server() { "plugins" } else { "mods" }
+    }
+
+    /// Loader name as used by Modrinth's `loaders` filter.
+    pub fn modrinth_name(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for Loader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Exactly one of `modrinth`, `curseforge` or `url` should be set.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModpackSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modrinth: Option<ModrinthPack>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curseforge: Option<CurseForgePack>,
+    /// Direct link to a `.mrpack` or a server-pack zip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Case-insensitive substrings of file names to skip (e.g. client-only mods a pack forgot to flag).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// File-name substrings to keep even when detected as client-only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModrinthPack {
+    /// Project slug or ID, e.g. `cobblemon-fabric`.
+    pub project: String,
+    /// Version number or ID. Latest release when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseForgePack {
+    /// Project slug (e.g. `all-the-mods-10`) or numeric ID. Requires a CurseForge API key.
+    pub project: String,
+    /// File ID. Latest file when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<u64>,
+    /// Use the author's server pack when one is published (recommended). Default true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_server_pack: Option<bool>,
+}
+
+/// A single mod or plugin. Exactly one of `modrinth` or `url` should be set.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct ModRef {
+    /// Modrinth slug or ID. The newest version compatible with the server's loader and version is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modrinth: Option<String>,
+    /// Pin a Modrinth version number or ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Direct download URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Destination directory relative to the server root. Defaults to `mods` or `plugins`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerResources {
+    /// Container memory limit. The JVM heap is derived from it.
+    #[serde(default = "default_memory")]
+    pub memory: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_limit: Option<String>,
+    /// Size of the world/data volume.
+    #[serde(default = "default_storage")]
+    pub storage: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_class: Option<String>,
+}
+
+fn default_memory() -> String {
+    crate::defaults::MEMORY.into()
+}
+fn default_storage() -> String {
+    crate::defaults::STORAGE.into()
+}
+
+impl Default for ServerResources {
+    fn default() -> Self {
+        Self { memory: default_memory(), cpu: None, cpu_limit: None, storage: default_storage(), storage_class: None }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct JvmSpec {
+    /// Percentage of the memory limit given to the heap. Default: limit minus max(1Gi, 15%).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heap_percent: Option<u8>,
+    /// Force a Java major version (8, 17, 21, 25).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub java_version: Option<u8>,
+    /// Use Aikar's G1GC flags. Default true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aikar_flags: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_args: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSpec {
+    pub path: String,
+    pub content: String,
+    /// Only write the file if it does not exist yet.
+    #[serde(default)]
+    pub if_missing: bool,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingSpec {
+    /// Hostnames players connect with. Defaults to `<name>.<baseDomain>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hostnames: Vec<String>,
+    /// Send a PROXY protocol v2 header so the server sees real client IPs (Paper/Velocity/HAProxy-aware mods).
+    #[serde(default)]
+    pub proxy_protocol: bool,
+    /// Start a sleeping server when a player tries to join. Default true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_wake: Option<bool>,
+    /// Route connections with unknown hostnames here.
+    #[serde(default)]
+    pub default: bool,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum VoiceKind {
+    SimpleVoiceChat,
+    PlasmoVoice,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceSpec {
+    #[serde(default = "default_voice")]
+    pub kind: VoiceKind,
+    /// Install the voice mod/plugin from Modrinth. Disable if your modpack already ships it.
+    #[serde(default = "yes")]
+    pub install: bool,
+    /// Pin the public UDP port instead of allocating one from the pool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_port: Option<u16>,
+}
+
+fn default_voice() -> VoiceKind {
+    VoiceKind::SimpleVoiceChat
+}
+fn yes() -> bool {
+    true
+}
+
+impl VoiceKind {
+    pub fn container_port(self) -> u16 {
+        match self {
+            VoiceKind::SimpleVoiceChat => SIMPLE_VOICE_CHAT_PORT,
+            VoiceKind::PlasmoVoice => PLASMO_VOICE_PORT,
+        }
+    }
+    pub fn modrinth_slug(self) -> &'static str {
+        match self {
+            VoiceKind::SimpleVoiceChat => "simple-voice-chat",
+            VoiceKind::PlasmoVoice => "plasmo-voice",
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeyserSpec {
+    #[serde(default = "yes")]
+    pub install: bool,
+    /// Also install Floodgate so Bedrock players don't need a Java account.
+    #[serde(default = "yes")]
+    pub floodgate: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_port: Option<u16>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Protocol {
+    #[default]
+    Tcp,
+    Udp,
+}
+
+impl Protocol {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Protocol::Tcp => "TCP",
+            Protocol::Udp => "UDP",
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Exposure {
+    /// Allocate a public port on the gateway.
+    #[default]
+    Gateway,
+    /// Expose over HTTP through an Ingress (needs `host`).
+    Ingress,
+    /// Cluster-internal only.
+    Internal,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtraPort {
+    /// DNS-1123 label, unique per server (e.g. `bluemap`).
+    pub name: String,
+    pub container_port: u16,
+    #[serde(default)]
+    pub protocol: Protocol,
+    #[serde(default)]
+    pub expose: Exposure,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_port: Option<u16>,
+    /// Ingress host when `expose: ingress`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoSleepSpec {
+    #[serde(default = "default_idle")]
+    pub idle_minutes: u32,
+}
+
+fn default_idle() -> u32 {
+    crate::defaults::AUTO_SLEEP_IDLE_MINUTES
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MinecraftServerStatus {
+    #[serde(default)]
+    pub phase: Phase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<Resolved>,
+    /// Hash of the spec fields `resolved` was computed from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_hash: Option<String>,
+    /// Hostnames routed to this server by the gateway.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hostnames: Vec<String>,
+    /// In-cluster service the gateway forwards to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allocations: Vec<PortAllocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub players: Option<Players>,
+    /// Last time a player was seen online (RFC 3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_active: Option<String>,
+    /// Stopped by auto-sleep; the gateway clears this when a player joins.
+    #[serde(default)]
+    pub sleeping: bool,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, JsonSchema, PartialEq, Eq)]
+pub enum Phase {
+    #[default]
+    Pending,
+    Installing,
+    Starting,
+    Running,
+    Sleeping,
+    Stopped,
+    Error,
+}
+
+impl Phase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phase::Pending => "Pending",
+            Phase::Installing => "Installing",
+            Phase::Starting => "Starting",
+            Phase::Running => "Running",
+            Phase::Sleeping => "Sleeping",
+            Phase::Stopped => "Stopped",
+            Phase::Error => "Error",
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Resolved {
+    pub minecraft_version: String,
+    pub loader: Loader,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loader_version: Option<String>,
+    pub java_version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modpack: Option<ResolvedModpack>,
+}
+
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedModpack {
+    pub name: String,
+    pub version: String,
+    /// Download URL of the pack (mrpack or zip).
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha1: Option<String>,
+    pub kind: ModpackKind,
+    /// CurseForge server pack, when one is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_pack_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_url: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ModpackKind {
+    #[default]
+    Mrpack,
+    CurseForge,
+    /// A zip containing a ready server directory.
+    ServerZip,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub struct PortAllocation {
+    pub name: String,
+    pub protocol: Protocol,
+    pub container_port: u16,
+    pub public_port: u16,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Players {
+    pub online: u32,
+    pub max: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sample: Vec<String>,
+}
+
+impl MinecraftServer {
+    pub fn phase(&self) -> Phase {
+        self.status.as_ref().map(|s| s.phase).unwrap_or_default()
+    }
+
+    /// Whether the pod should be running right now.
+    pub fn wants_running(&self) -> bool {
+        !self.spec.paused && !self.status.as_ref().is_some_and(|s| s.sleeping)
+    }
+
+    pub fn auto_wake(&self) -> bool {
+        self.spec.routing.auto_wake.unwrap_or(true) && !self.spec.paused
+    }
+}
+
+/// Hostnames a server answers to.
+pub fn effective_hostnames(name: &str, spec: &MinecraftServerSpec, base_domain: Option<&str>) -> Vec<String> {
+    if !spec.routing.hostnames.is_empty() {
+        return spec.routing.hostnames.iter().map(|h| normalize_host(h)).collect();
+    }
+    match base_domain {
+        Some(d) if !d.is_empty() => vec![format!("{}.{}", name, d.trim_matches('.')).to_ascii_lowercase()],
+        _ => vec![],
+    }
+}
+
+/// Lower-case, strip a trailing dot and any port.
+pub fn normalize_host(h: &str) -> String {
+    let h = h.trim().trim_end_matches('.');
+    let h = h.rsplit_once(':').map_or(h, |(host, port)| if port.chars().all(|c| c.is_ascii_digit()) { host } else { h });
+    h.to_ascii_lowercase()
+}
+
+/// Port requests derived from the spec, before allocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortRequest {
+    pub name: String,
+    pub protocol: Protocol,
+    pub container_port: u16,
+    pub public_port: Option<u16>,
+}
+
+impl MinecraftServerSpec {
+    pub fn port_requests(&self) -> Vec<PortRequest> {
+        let mut out = vec![];
+        if let Some(v) = &self.voice {
+            out.push(PortRequest {
+                name: "voice".into(),
+                protocol: Protocol::Udp,
+                container_port: v.kind.container_port(),
+                public_port: v.public_port,
+            });
+        }
+        if let Some(g) = &self.geyser {
+            out.push(PortRequest {
+                name: "bedrock".into(),
+                protocol: Protocol::Udp,
+                container_port: GEYSER_PORT,
+                public_port: g.public_port,
+            });
+        }
+        for p in &self.extra_ports {
+            if p.expose == Exposure::Gateway {
+                out.push(PortRequest {
+                    name: p.name.clone(),
+                    protocol: p.protocol,
+                    container_port: p.container_port,
+                    public_port: p.public_port,
+                });
+            }
+        }
+        out
+    }
+}

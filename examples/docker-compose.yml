@@ -1,0 +1,21 @@
+# An existing itzg/minecraft-server setup. Paste it into the dashboard (Compose tab) or run
+# `cubeharbor render examples/docker-compose.yml` — it is converted automatically.
+services:
+  survival:
+    image: itzg/minecraft-server
+    ports:
+      - "25565:25565"
+      - "24454:24454/udp"     # -> voice chat on public port 24454
+      - "19132:19132/udp"     # -> Bedrock/Geyser
+    environment:
+      EULA: "TRUE"
+      TYPE: AUTO_CURSEFORGE
+      CF_PAGE_URL: https://www.curseforge.com/minecraft/modpacks/all-the-mods-9
+      MEMORY: 10G
+      DIFFICULTY: normal
+      OPS: Steve,Alex
+      MODRINTH_PROJECTS: chunky
+    volumes:
+      - ./data:/data
+  router:
+    image: itzg/mc-router     # skipped: the cubeharbor gateway does this

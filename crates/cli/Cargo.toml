@@ -1,0 +1,18 @@
+[package]
+name = "cubeharbor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line tool for cubeharbor"
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+cubeharbor-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+kube.workspace = true
+k8s-openapi.workspace = true

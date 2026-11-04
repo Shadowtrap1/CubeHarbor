@@ -1,0 +1,54 @@
+/* cubeharbor dashboard stylesheet.
+ *
+ * Every colour and font is a CSS variable in :root below. To restyle a deployment without
+ * rebuilding, set `theme:` in the site config (dashboard.site.theme in Helm), e.g.
+ *   theme: { accent: "#7c5cff", bg: "#101014" }
+ * or add rules with `customCss:`. Editing this file changes the built-in defaults.
+ */
+:root{
+  /* base palette */
+  --bg:#0f1115;--panel:#171a21;--line:#262b36;--text:#e6e8ee;--muted:#8b93a7;
+  --accent:#5bbd72;--warn:#e0b341;--err:#e5534b;--info:#539bf5;
+  /* surfaces */
+  --input-bg:#0c0e12;--log-bg:#0a0c10;--button-border:#333a48;
+  /* status badges */
+  --running-bg:#1f3b27;--pending-bg:#3b3420;--error-bg:#3d1f1f;--idle-bg:#232836;
+  /* buttons */
+  --primary-bg:#2a6b3a;--primary-border:#2f7d43;--danger-bg:#5a2424;--danger-border:#7a2d2d;
+  /* notices */
+  --warn-note-bg:#2a2617;--error-note-bg:#2a1717;
+  /* typography and layout */
+  --font:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  --font-size:14px;--max-width:1200px;--radius:8px;
+}
+*{box-sizing:border-box}body{margin:0;font:var(--font-size)/1.5 var(--font);background:var(--bg);color:var(--text)}
+a{color:var(--info);text-decoration:none}a:hover{text-decoration:underline}
+header{display:flex;align-items:center;gap:24px;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--panel)}
+header .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;color:var(--text)}header .brand img{height:24px}
+header nav{display:flex;gap:16px;flex:1}
+main{max-width:var(--max-width);margin:0 auto;padding:24px}
+footer{max-width:var(--max-width);margin:0 auto;padding:0 24px 24px;color:var(--muted);font-size:12px}
+h1{font-size:22px;margin:0 0 16px}h2{font-size:16px;margin:24px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.brand-title{display:flex;align-items:center;gap:10px}.brand-title img{height:32px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:16px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{color:var(--muted);font-weight:500;font-size:12px;text-transform:uppercase}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:var(--line)}
+.Running{background:var(--running-bg);color:var(--accent)}.Starting,.Installing,.Pending{background:var(--pending-bg);color:var(--warn)}
+.Error{background:var(--error-bg);color:var(--err)}.Sleeping,.Stopped{background:var(--idle-bg);color:var(--muted)}
+.muted{color:var(--muted)}.mono,code,pre,textarea{font-family:var(--font-mono);font-size:13px}
+button,.btn{background:var(--line);color:var(--text);border:1px solid var(--button-border);border-radius:6px;padding:6px 12px;cursor:pointer;font:inherit}
+button:hover,.btn:hover{border-color:var(--muted);text-decoration:none}
+button.primary{background:var(--primary-bg);border-color:var(--primary-border)}button.danger{background:var(--danger-bg);border-color:var(--danger-border)}
+input,select,textarea{background:var(--input-bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font:inherit;width:100%}
+textarea{min-height:320px}label{display:block;color:var(--muted);font-size:12px;margin:10px 0 4px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.check{display:flex;gap:6px;align-items:center;color:var(--text);font-size:14px}.check input{width:auto}
+.tabs{display:flex;gap:4px;margin-bottom:-1px}.tabs button{border-radius:6px 6px 0 0}.tabs button.on{background:var(--panel);border-bottom-color:var(--panel)}
+#log{height:480px;overflow:auto;background:var(--log-bg);border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap;margin:0}
+.results{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:10px}
+.pack{display:flex;gap:10px;padding:10px;border:1px solid var(--line);border-radius:6px;cursor:pointer}.pack:hover{border-color:var(--accent)}
+.pack img{width:48px;height:48px;border-radius:6px;object-fit:cover}.pack b{display:block}.pack small{color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.warn{border-left:3px solid var(--warn);padding:6px 10px;background:var(--warn-note-bg);margin:4px 0}.error{border-left:3px solid var(--err);padding:6px 10px;background:var(--error-note-bg)}
+.kv{display:grid;grid-template-columns:160px 1fr;gap:6px 12px}.kv div:nth-child(odd){color:var(--muted)}

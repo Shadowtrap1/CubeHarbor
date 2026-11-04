@@ -1,0 +1,498 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: minecraftservers.cubeharbor.dev
+spec:
+  group: cubeharbor.dev
+  names:
+    kind: MinecraftServer
+    plural: minecraftservers
+    shortNames:
+    - mcs
+    singular: minecraftserver
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.resolved.minecraftVersion
+      name: Version
+      type: string
+    - jsonPath: .status.resolved.loader
+      name: Loader
+      type: string
+    - jsonPath: .status.players.online
+      name: Players
+      type: integer
+    - jsonPath: .status.hostnames[0]
+      name: Address
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for MinecraftServerSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              acceptEula:
+                description: Accept the Minecraft EULA (https://aka.ms/MinecraftEULA). Falls back to the operator-wide default.
+                nullable: true
+                type: boolean
+              autoSleep:
+                description: Stop the server after a period without players. The gateway wakes it when someone joins.
+                nullable: true
+                properties:
+                  idleMinutes:
+                    default: 15
+                    minimum: 0.0
+                    type: integer
+                type: object
+              env:
+                additionalProperties:
+                  type: string
+                description: Extra environment variables for the server container.
+                type: object
+              extraPorts:
+                description: Additional ports (web maps, query, custom plugins).
+                items:
+                  properties:
+                    containerPort:
+                      maximum: 65535.0
+                      minimum: 0.0
+                      type: integer
+                    expose:
+                      default: gateway
+                      enum:
+                      - gateway
+                      - ingress
+                      - internal
+                      type: string
+                    host:
+                      description: 'Ingress host when `expose: ingress`.'
+                      nullable: true
+                      type: string
+                    name:
+                      description: DNS-1123 label, unique per server (e.g. `bluemap`).
+                      type: string
+                    protocol:
+                      default: TCP
+                      enum:
+                      - TCP
+                      - UDP
+                      type: string
+                    publicPort:
+                      maximum: 65535.0
+                      minimum: 0.0
+                      nullable: true
+                      type: integer
+                  required:
+                  - containerPort
+                  - name
+                  type: object
+                type: array
+              files:
+                description: Files written into the server directory on every start (path relative to the server root).
+                items:
+                  properties:
+                    content:
+                      type: string
+                    ifMissing:
+                      default: false
+                      description: Only write the file if it does not exist yet.
+                      type: boolean
+                    path:
+                      type: string
+                  required:
+                  - content
+                  - path
+                  type: object
+                type: array
+              geyser:
+                description: Bedrock cross-play through Geyser. Allocates a public UDP port and installs Geyser (+ Floodgate).
+                nullable: true
+                properties:
+                  floodgate:
+                    default: true
+                    description: Also install Floodgate so Bedrock players don't need a Java account.
+                    type: boolean
+                  install:
+                    default: true
+                    type: boolean
+                  publicPort:
+                    maximum: 65535.0
+                    minimum: 0.0
+                    nullable: true
+                    type: integer
+                type: object
+              image:
+                description: Override the server image (normally picked from the required Java version).
+                nullable: true
+                type: string
+              jvm:
+                default: {}
+                properties:
+                  aikarFlags:
+                    description: Use Aikar's G1GC flags. Default true.
+                    nullable: true
+                    type: boolean
+                  extraArgs:
+                    items:
+                      type: string
+                    type: array
+                  heapPercent:
+                    description: 'Percentage of the memory limit given to the heap. Default: limit minus max(1Gi, 15%).'
+                    maximum: 255.0
+                    minimum: 0.0
+                    nullable: true
+                    type: integer
+                  javaVersion:
+                    description: Force a Java major version (8, 17, 21, 25).
+                    maximum: 255.0
+                    minimum: 0.0
+                    nullable: true
+                    type: integer
+                type: object
+              loader:
+                description: Server software. Inferred from the modpack when one is set.
+                enum:
+                - vanilla
+                - paper
+                - purpur
+                - fabric
+                - quilt
+                - forge
+                - neoforge
+                - null
+                nullable: true
+                type: string
+              loaderVersion:
+                description: Loader version (Fabric loader, Forge/NeoForge build, Paper build...). Defaults to the latest stable.
+                nullable: true
+                type: string
+              modpack:
+                description: Install a modpack. Mod loader and Minecraft version are taken from the pack.
+                nullable: true
+                properties:
+                  curseforge:
+                    nullable: true
+                    properties:
+                      fileId:
+                        description: File ID. Latest file when omitted.
+                        minimum: 0.0
+                        nullable: true
+                        type: integer
+                      project:
+                        description: Project slug (e.g. `all-the-mods-10`) or numeric ID. Requires a CurseForge API key.
+                        type: string
+                      useServerPack:
+                        description: Use the author's server pack when one is published (recommended). Default true.
+                        nullable: true
+                        type: boolean
+                    required:
+                    - project
+                    type: object
+                  exclude:
+                    description: Case-insensitive substrings of file names to skip (e.g. client-only mods a pack forgot to flag).
+                    items:
+                      type: string
+                    type: array
+                  include:
+                    description: File-name substrings to keep even when detected as client-only.
+                    items:
+                      type: string
+                    type: array
+                  modrinth:
+                    nullable: true
+                    properties:
+                      project:
+                        description: Project slug or ID, e.g. `cobblemon-fabric`.
+                        type: string
+                      version:
+                        description: Version number or ID. Latest release when omitted.
+                        nullable: true
+                        type: string
+                    required:
+                    - project
+                    type: object
+                  url:
+                    description: Direct link to a `.mrpack` or a server-pack zip.
+                    nullable: true
+                    type: string
+                type: object
+              mods:
+                description: Extra mods / plugins installed on top of the base server or modpack.
+                items:
+                  description: A single mod or plugin. Exactly one of `modrinth` or `url` should be set.
+                  properties:
+                    dir:
+                      description: Destination directory relative to the server root. Defaults to `mods` or `plugins`.
+                      nullable: true
+                      type: string
+                    modrinth:
+                      description: Modrinth slug or ID. The newest version compatible with the server's loader and version is used.
+                      nullable: true
+                      type: string
+                    url:
+                      description: Direct download URL.
+                      nullable: true
+                      type: string
+                    version:
+                      description: Pin a Modrinth version number or ID.
+                      nullable: true
+                      type: string
+                  type: object
+                type: array
+              motd:
+                nullable: true
+                type: string
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                type: object
+              ops:
+                description: Player names granted operator status.
+                items:
+                  type: string
+                type: array
+              paused:
+                default: false
+                description: Scale the server to zero. Data is kept.
+                type: boolean
+              properties:
+                additionalProperties:
+                  type: string
+                description: Raw `server.properties` overrides.
+                type: object
+              resources:
+                default:
+                  memory: 4Gi
+                  storage: 20Gi
+                properties:
+                  cpu:
+                    nullable: true
+                    type: string
+                  cpuLimit:
+                    nullable: true
+                    type: string
+                  memory:
+                    default: 4Gi
+                    description: Container memory limit. The JVM heap is derived from it.
+                    type: string
+                  storage:
+                    default: 20Gi
+                    description: Size of the world/data volume.
+                    type: string
+                  storageClass:
+                    nullable: true
+                    type: string
+                type: object
+              routing:
+                default:
+                  default: false
+                  proxyProtocol: false
+                properties:
+                  autoWake:
+                    description: Start a sleeping server when a player tries to join. Default true.
+                    nullable: true
+                    type: boolean
+                  default:
+                    default: false
+                    description: Route connections with unknown hostnames here.
+                    type: boolean
+                  hostnames:
+                    description: Hostnames players connect with. Defaults to `<name>.<baseDomain>`.
+                    items:
+                      type: string
+                    type: array
+                  proxyProtocol:
+                    default: false
+                    description: Send a PROXY protocol v2 header so the server sees real client IPs (Paper/Velocity/HAProxy-aware mods).
+                    type: boolean
+                type: object
+              version:
+                description: Minecraft version (e.g. `1.21.1`, `26.3`, `latest`). Optional when a modpack defines it.
+                nullable: true
+                type: string
+              voice:
+                description: Proximity voice chat. Allocates a public UDP port and configures the mod automatically.
+                nullable: true
+                properties:
+                  install:
+                    default: true
+                    description: Install the voice mod/plugin from Modrinth. Disable if your modpack already ships it.
+                    type: boolean
+                  kind:
+                    default: simple-voice-chat
+                    enum:
+                    - simple-voice-chat
+                    - plasmo-voice
+                    type: string
+                  publicPort:
+                    description: Pin the public UDP port instead of allocating one from the pool.
+                    maximum: 65535.0
+                    minimum: 0.0
+                    nullable: true
+                    type: integer
+                type: object
+              whitelist:
+                description: Player names allowed to join. Enables the whitelist when non-empty.
+                items:
+                  type: string
+                type: array
+            type: object
+          status:
+            nullable: true
+            properties:
+              allocations:
+                items:
+                  properties:
+                    containerPort:
+                      maximum: 65535.0
+                      minimum: 0.0
+                      type: integer
+                    name:
+                      type: string
+                    protocol:
+                      enum:
+                      - TCP
+                      - UDP
+                      type: string
+                    publicPort:
+                      maximum: 65535.0
+                      minimum: 0.0
+                      type: integer
+                  required:
+                  - containerPort
+                  - name
+                  - protocol
+                  - publicPort
+                  type: object
+                type: array
+              hostnames:
+                description: Hostnames routed to this server by the gateway.
+                items:
+                  type: string
+                type: array
+              lastActive:
+                description: Last time a player was seen online (RFC 3339).
+                nullable: true
+                type: string
+              message:
+                nullable: true
+                type: string
+              observedGeneration:
+                format: int64
+                nullable: true
+                type: integer
+              phase:
+                default: Pending
+                enum:
+                - Pending
+                - Installing
+                - Starting
+                - Running
+                - Sleeping
+                - Stopped
+                - Error
+                type: string
+              players:
+                nullable: true
+                properties:
+                  max:
+                    minimum: 0.0
+                    type: integer
+                  online:
+                    minimum: 0.0
+                    type: integer
+                  sample:
+                    items:
+                      type: string
+                    type: array
+                required:
+                - max
+                - online
+                type: object
+              resolved:
+                nullable: true
+                properties:
+                  javaVersion:
+                    maximum: 255.0
+                    minimum: 0.0
+                    type: integer
+                  loader:
+                    enum:
+                    - vanilla
+                    - paper
+                    - purpur
+                    - fabric
+                    - quilt
+                    - forge
+                    - neoforge
+                    type: string
+                  loaderVersion:
+                    nullable: true
+                    type: string
+                  minecraftVersion:
+                    type: string
+                  modpack:
+                    nullable: true
+                    properties:
+                      iconUrl:
+                        nullable: true
+                        type: string
+                      kind:
+                        enum:
+                        - mrpack
+                        - curseforge
+                        - serverzip
+                        type: string
+                      name:
+                        type: string
+                      serverPackUrl:
+                        description: CurseForge server pack, when one is used.
+                        nullable: true
+                        type: string
+                      sha1:
+                        nullable: true
+                        type: string
+                      url:
+                        description: Download URL of the pack (mrpack or zip).
+                        type: string
+                      version:
+                        type: string
+                    required:
+                    - kind
+                    - name
+                    - url
+                    - version
+                    type: object
+                required:
+                - javaVersion
+                - loader
+                - minecraftVersion
+                type: object
+              resolvedHash:
+                description: Hash of the spec fields `resolved` was computed from.
+                nullable: true
+                type: string
+              service:
+                description: In-cluster service the gateway forwards to.
+                nullable: true
+                type: string
+              sleeping:
+                default: false
+                description: Stopped by auto-sleep; the gateway clears this when a player joins.
+                type: boolean
+            type: object
+        required:
+        - spec
+        title: MinecraftServer
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
