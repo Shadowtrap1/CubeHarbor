@@ -11,6 +11,53 @@ All notable changes are listed here. The format follows
 * Dashboard: refuses to start with an empty `DASHBOARD_PASSWORD`. Failed logins are now
   rate-limited per client (10/min) with a global backstop (100/min), so one client can no
   longer lock everyone out. New `dashboard.trustedProxies` / `TRUSTED_PROXIES`.
+### Fixed
+
+* Compose: `curseforge:`/`cf:` entries in `mods:` are rejected with a clear error instead of
+  being read as Modrinth project `curseforge`.
+* Installer: Quilt uses the latest stable installer, not a pre-release.
+* Player names in `ops`/`whitelist` are validated before the Mojang lookup.
+* `cubeharbor ping` / operator status pings no longer panic (debug) on a negative length from a
+  misbehaving server.
+* Operator: the `cubeharbor-gateway-ports` Service is no longer deleted when the last allocated
+  port goes away. It keeps a placeholder port instead, so a cloud load balancer keeps its
+  external IP and voice chat / Bedrock addresses keep working when ports come back.
+* Installer: removing the modpack from a server now deletes the pack's mods instead of leaving
+  them untracked in `mods/`.
+* Installer: players removed from `ops` or `whitelist` in the spec are now removed from
+  `ops.json` / `whitelist.json` (players added in-game are left alone), and emptying the
+  whitelist turns `white-list` off again. Only players removed after this version are cleaned up.
+* Hostname conflicts: when two servers claim the same hostname, or more than one sets
+  `routing.default`, the oldest keeps it. The newer one keeps running without the contested hostnames (or default
+  flag) and reports the conflict in its status message. The gateway and mc-router always route
+  to the oldest instead of picking at random.
+* Operator: Ingresses for ports that were removed, renamed or moved to another host are now
+  deleted, and turning `rconNetworkPolicy` off deletes the existing per-server RCON
+  NetworkPolicies.
+* Operator: port names and container ports are checked before anything is applied, so colliding
+  or invalid ports (e.g. two long names cut to the same 15 characters, or an extra port reusing
+  the voice chat port) give a clear status message instead of repeated API errors.
+* Server names that start with a digit (e.g. `2b2t`) are prefixed with `mc-` on compose import
+  and quick create, and the operator reports invalid or too long names (Services need a
+  DNS-1035 label of at most 52 characters here) instead of failing halfway through a reconcile.
+* Compose import: `LEVEL` and `SEED` keep their case, so an imported world folder like
+  `MyWorld` is loaded instead of a new world being generated.
+* Port allocation: a new or newly pinned port no longer collides with a port the server already
+  holds, which left the server in `Error` with "requested twice".
+* Installer: malformed hashes in a modpack manifest are rejected instead of crashing the
+  installer, and parallel downloads to `a.jar` and `a.zip` no longer share a temp file.
+* Operator: status fields that become empty are now cleared, so a fixed error's message and a
+  stopped server's player list no longer stick around.
+
+### Security
+
+* Gateway: forwarded TCP ports (voice chat, Bedrock over TCP, extras) now have a connection
+  limit (`gateway.maxForwardConnections`, default 1024, separate from the Minecraft port's), and TCP connections idle in both directions for
+  `gateway.idleTimeoutSeconds` (default 600, `IDLE_TIMEOUT_SECS`) are closed.
+* Installer: `.mrpack` file downloads are restricted to HTTPS on the hosts the Modrinth pack
+  format allows; other URLs are ignored, and a file with none left fails the install
+  (`CUBEHARBOR_MRPACK_ANY_HOST=true` to opt out). Installer boolean env vars now accept
+  `1`/`yes`/`y`/`on` as well as `true`.
 
 ## [0.1.0]
 

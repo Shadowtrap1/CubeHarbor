@@ -6,6 +6,7 @@
 
 mod forward;
 mod minecraft;
+mod pipe;
 
 use std::sync::Arc;
 
@@ -42,6 +43,13 @@ pub struct Config {
     /// Concurrent Minecraft connections, across all clients.
     #[arg(long, env = "MAX_CONNECTIONS", default_value_t = 4096)]
     pub max_connections: usize,
+    /// Concurrent connections on forwarded TCP ports (all ports together). Separate from
+    /// MAX_CONNECTIONS so a flood on e.g. a web map port can't stop players from joining.
+    #[arg(long, env = "MAX_FORWARD_CONNECTIONS", default_value_t = 1024)]
+    pub max_forward_connections: usize,
+    /// Close TCP connections with no traffic either way for this many seconds (0 = never).
+    #[arg(long, env = "IDLE_TIMEOUT_SECS", default_value_t = 600)]
+    pub idle_timeout_secs: u64,
     /// Concurrent UDP sessions per forwarded port.
     #[arg(long, env = "MAX_UDP_SESSIONS", default_value_t = 4096)]
     pub max_udp_sessions: usize,
@@ -54,8 +62,15 @@ pub struct State {
     pub cfg: Config,
     pub trusted_proxies: Vec<cidr::Cidr>,
     pub connections: Arc<tokio::sync::Semaphore>,
+    pub forward_connections: Arc<tokio::sync::Semaphore>,
     /// Last wake request per server, so join spam doesn't hammer the API server.
     pub wakes: Arc<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>>,
+}
+
+impl State {
+    pub fn idle_timeout(&self) -> Option<std::time::Duration> {
+        (self.cfg.idle_timeout_secs > 0).then(|| std::time::Duration::from_secs(self.cfg.idle_timeout_secs))
+    }
 }
 
 #[tokio::main]
@@ -92,6 +107,7 @@ async fn main() -> Result<()> {
         client,
         trusted_proxies,
         connections: Arc::new(tokio::sync::Semaphore::new(cfg.max_connections.max(1))),
+        forward_connections: Arc::new(tokio::sync::Semaphore::new(cfg.max_forward_connections.max(1))),
         wakes: Default::default(),
         cfg: cfg.clone(),
     });

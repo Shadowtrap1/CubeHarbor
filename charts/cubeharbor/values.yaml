@@ -154,6 +154,12 @@ gateway:
   # -- CIDRs of those load balancers. PROXY headers from other peers are ignored, so players
   # can't spoof their IP. Empty = trust any peer (only safe if nothing else can reach the gateway).
   trustedProxies: []
+  # -- Close player and forwarded TCP connections after this many seconds without traffic
+  # (0 = never). Minecraft clients send keep-alives, so this only catches dead connections.
+  idleTimeoutSeconds: 600
+  # -- Concurrent connections on the Minecraft port, and on all forwarded TCP ports together.
+  maxConnections: 4096
+  maxForwardConnections: 1024
   resources:
     requests: { cpu: 50m, memory: 32Mi }
     limits: { memory: 256Mi }

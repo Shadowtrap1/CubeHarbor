@@ -41,6 +41,19 @@ impl Item {
         self.sha1.is_some() || self.sha256.is_some() || self.sha512.is_some()
     }
 
+    /// Hashes come from modpack manifests: reject anything that isn't hex of the right length
+    /// before it is compared or used as a cache path.
+    fn check_hashes(&self) -> Result<()> {
+        for (name, h, len) in [("sha1", &self.sha1, 40), ("sha256", &self.sha256, 64), ("sha512", &self.sha512, 128)] {
+            if let Some(h) = h
+                && (h.len() != len || !h.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                bail!("invalid {name} `{h}` for {}", self.dest.display());
+            }
+        }
+        Ok(())
+    }
+
     fn cache_key(&self) -> Option<String> {
         self.sha1.clone().or_else(|| self.sha512.clone()).or_else(|| self.sha256.clone())
     }
@@ -100,6 +113,7 @@ async fn matches(path: &Path, item: &Item) -> bool {
 }
 
 pub async fn fetch(ctx: &Ctx, item: &Item) -> Result<()> {
+    item.check_hashes()?;
     if matches(&item.dest, item).await {
         return Ok(());
     }
@@ -159,7 +173,7 @@ fn max_download_bytes() -> u64 {
 /// Without a checksum, transport security is the only integrity check: refuse plain HTTP
 /// (including after redirects) unless `CUBEHARBOR_ALLOW_INSECURE_HTTP=true`.
 fn check_transport(url: &reqwest::Url, item: &Item) -> Result<()> {
-    let allow = std::env::var("CUBEHARBOR_ALLOW_INSECURE_HTTP").is_ok_and(|v| v == "true");
+    let allow = crate::env_flag("CUBEHARBOR_ALLOW_INSECURE_HTTP");
     if url.scheme() != "https" && !item.has_hash() && !allow {
         bail!("refusing unverified download over {}: {url} (use https, or set CUBEHARBOR_ALLOW_INSECURE_HTTP=true)", url.scheme());
     }
@@ -177,7 +191,7 @@ async fn download_once(ctx: &Ctx, url: &str, item: &Item) -> Result<()> {
     if resp.content_length().is_some_and(|n| n > limit) {
         bail!("{url} is larger than the {} MiB download limit", limit / 1024 / 1024);
     }
-    let tmp = item.dest.with_extension("cubeharbor-part");
+    let tmp = part_path(&item.dest);
     let mut file = tokio::fs::File::create(&tmp).await?;
     let mut hashers = Hashers::default();
     let mut stream = resp.bytes_stream();
@@ -201,6 +215,13 @@ async fn download_once(ctx: &Ctx, url: &str, item: &Item) -> Result<()> {
     }
     tokio::fs::rename(&tmp, &item.dest).await?;
     Ok(())
+}
+
+/// `mods/a.jar` -> `mods/a.jar.cubeharbor-part` (appended, so `a.jar` and `a.zip` don't share one).
+fn part_path(dest: &Path) -> PathBuf {
+    let mut name = dest.as_os_str().to_owned();
+    name.push(".cubeharbor-part");
+    PathBuf::from(name)
 }
 
 /// Download many files concurrently, logging progress.
@@ -266,6 +287,23 @@ mod tests {
         assert!(check_transport(&http, &bare).is_err());
         assert!(check_transport(&https, &bare).is_ok());
         assert!(check_transport(&http, &bare.clone().sha1(Some("ab".into()))).is_ok());
+    }
+
+    #[test]
+    fn malformed_hashes_are_rejected() {
+        let sha1 = "a".repeat(40);
+        assert!(Item::new("x", "/tmp/x").sha1(Some(sha1.clone())).check_hashes().is_ok());
+        assert!(Item::new("x", "/tmp/x").sha1(Some(sha1.to_uppercase())).check_hashes().is_ok());
+        assert!(Item::new("x", "/tmp/x").sha1(Some(String::new())).check_hashes().is_err());
+        assert!(Item::new("x", "/tmp/x").sha1(Some("é".into())).check_hashes().is_err());
+        assert!(Item::new("x", "/tmp/x").sha1(Some(format!("../{}", &sha1[3..]))).check_hashes().is_err());
+        assert!(Item::new("x", "/tmp/x").sha256(Some(sha1)).check_hashes().is_err());
+    }
+
+    #[test]
+    fn part_files_are_distinct() {
+        assert_eq!(part_path(Path::new("/data/mods/a.jar")), PathBuf::from("/data/mods/a.jar.cubeharbor-part"));
+        assert_ne!(part_path(Path::new("/data/a.jar")), part_path(Path::new("/data/a.zip")));
     }
 
     #[test]
