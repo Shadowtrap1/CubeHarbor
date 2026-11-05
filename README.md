@@ -101,7 +101,10 @@ characters>'` to the install (or `helm upgrade --reuse-values` later), or keep i
 with a `password` key and set `dashboard.existingSecret`. Without either, a random 24-character
 password is generated once and kept across upgrades. Once logged in, you can also change it on the
 dashboard's **Account** page (`dashboard.allowPasswordChange`, on by default): it's saved to the
-same Secret, and every other session is logged out.
+same Secret, and every other session is logged out. This is off with `dashboard.existingSecret`
+(change the password where that Secret comes from). Installs rendered with `helm template` (Argo
+CD, Flux post-rendering) re-render the Secret on every sync, which reverts a changed password, so
+set `dashboard.password` and turn `allowPasswordChange` off there.
 
 Before you expose the dashboard, read [Security notes](#security-notes) and give it an Ingress
 with TLS (`dashboard.ingress`). [`examples/values-k3s.yaml`](examples/values-k3s.yaml) is a

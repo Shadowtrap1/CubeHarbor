@@ -10,8 +10,8 @@ All notable changes are listed here. The format follows
 
 * Dashboard: an **Account** page to change the login password (current password required,
   at least 12 characters). It's saved to the dashboard's Secret and logs out other sessions
-  (`dashboard.allowPasswordChange`, on by default). The README now explains choosing your own
-  password at install.
+  (`dashboard.allowPasswordChange`, on by default; off with `existingSecret`). The README now
+  explains choosing your own password at install.
 
 ### Fixed
 

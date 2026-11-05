@@ -491,6 +491,7 @@ pub async fn change_password(
         tracing::warn!("could not store the new dashboard password: {e}");
         return page(StatusCode::BAD_GATEWAY, Err("Could not save the new password (see the dashboard logs). Nothing was changed."));
     }
+    // Keeps only the caller's session. With Bearer auth there is no cookie, so every session ends.
     st.set_password(&f.new, jar.get(COOKIE).map(|c| c.value()));
     tracing::info!("dashboard password changed from {client}; other sessions logged out");
     page(StatusCode::OK, Ok("Password changed. Other sessions have been logged out."))

@@ -177,8 +177,10 @@ dashboard:
   password: ""
   existingSecret: ""
   # -- Let a logged-in user change the password on the dashboard's Account page (it's written
-  # back to the Secret above). If `password` is set here, the next `helm upgrade` restores it.
-  # Turn off if the Secret is managed elsewhere (e.g. External Secrets).
+  # back to the chart's Secret). If `password` is set here, the next `helm upgrade` restores it.
+  # Always off with `existingSecret`, since that Secret's owner (External Secrets, SOPS, ...) would
+  # revert the change. With `helm template`-based GitOps (Argo CD, Flux post-rendering) the Secret
+  # is re-rendered on every sync, so turn this off there too.
   allowPasswordChange: true
   # -- Namespace for servers created from the dashboard (release namespace when empty).
   defaultNamespace: ""

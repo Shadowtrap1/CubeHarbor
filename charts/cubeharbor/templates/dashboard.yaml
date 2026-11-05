@@ -1,6 +1,8 @@
 {{- if .Values.dashboard.enabled }}
 {{- $fullname := include "cubeharbor.fullname" . -}}
 {{- $secretName := .Values.dashboard.existingSecret | default (printf "%s-dashboard" $fullname) -}}
+{{- /* Only a Secret this chart owns is written to: an existingSecret's owner would revert it. */ -}}
+{{- $pwChange := and .Values.dashboard.allowPasswordChange (not .Values.dashboard.existingSecret) -}}
 {{- if not .Values.dashboard.existingSecret }}
 {{- $password := .Values.dashboard.password -}}
 {{- $session := randAlphaNum 32 -}}
@@ -64,7 +66,7 @@ subjects:
   - kind: ServiceAccount
     name: {{ $fullname }}-dashboard
     namespace: {{ .Release.Namespace }}
-{{- if .Values.dashboard.allowPasswordChange }}
+{{- if $pwChange }}
 ---
 # Changing the login password from the dashboard writes it to this one Secret.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -76,7 +78,7 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     resourceNames: [{{ $secretName }}]
-    verbs: [get, patch]
+    verbs: [patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -152,7 +154,7 @@ spec:
             - { name: LISTEN_ADDR, value: {{ include "cubeharbor.listen" (dict "root" . "port" 8080) | quote }} }
             - name: DASHBOARD_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ $secretName }}, key: password } }
-            {{- if .Values.dashboard.allowPasswordChange }}
+            {{- if $pwChange }}
             - { name: PASSWORD_SECRET, value: {{ $secretName | quote }} }
             - name: POD_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }

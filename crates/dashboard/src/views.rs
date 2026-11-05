@@ -99,7 +99,7 @@ pub fn account(changeable: bool, msg: Option<Result<&str, &str>>) -> Markup {
                     "the next " code { "helm upgrade" } " puts that value back." } }
             } @else {
                 p.muted { "Changing the password here is turned off. Set " code { "dashboard.password" }
-                    " (or your own Secret via " code { "dashboard.existingSecret" } ") in the Helm values." }
+                    " in the Helm values, or change it in the Secret set as " code { "dashboard.existingSecret" } "." }
             }
         }
     })
