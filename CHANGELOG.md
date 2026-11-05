@@ -6,6 +6,12 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+* Operator: Ingresses for ports that were removed, renamed or moved to another host are now
+  deleted, and turning `rconNetworkPolicy` off deletes the existing per-server RCON
+  NetworkPolicies.
+
 ## [0.1.0]
 
 First public release.
