@@ -428,3 +428,86 @@ pub async fn api_search(st: St, Query(q): Query<SearchQuery>) -> R {
     };
     Ok(Json(hits).into_response())
 }
+
+// ---------------------------------------------------------------------------
+// Account
+// ---------------------------------------------------------------------------
+
+/// Shortest password the dashboard accepts when it's changed from the UI.
+pub const MIN_PASSWORD_LEN: usize = 12;
+
+pub async fn account_page(st: St) -> Response {
+    html(views::account(st.password_changeable(), None))
+}
+
+#[derive(Deserialize)]
+pub struct PasswordForm {
+    current: String,
+    new: String,
+    confirm: String,
+}
+
+/// Is `new` acceptable as the next password?
+fn check_new_password(current: &str, new: &str, confirm: &str) -> Result<(), String> {
+    if new.chars().count() < MIN_PASSWORD_LEN || new.trim().is_empty() {
+        return Err(format!("The new password must be at least {MIN_PASSWORD_LEN} characters."));
+    }
+    if new != confirm {
+        return Err("The new password and its confirmation don't match.".into());
+    }
+    if new == current {
+        return Err("The new password is the same as the current one.".into());
+    }
+    Ok(())
+}
+
+pub async fn change_password(
+    st: St,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Form(f): Form<PasswordForm>,
+) -> Response {
+    let page = |status: StatusCode, msg: Result<&str, &str>| (status, html(views::account(st.password_changeable(), Some(msg)))).into_response();
+    if !st.password_changeable() {
+        return page(StatusCode::BAD_REQUEST, Err("Changing the password here is turned off; set it in the Helm values instead."));
+    }
+    // The current password is checked like a login, including the failed-attempt limits, so a
+    // stolen session can't be turned into the password.
+    let client = st.client_ip(Some(peer.ip()), &headers);
+    if st.throttled(client) {
+        return page(StatusCode::TOO_MANY_REQUESTS, Err("Too many failed attempts, try again in a minute."));
+    }
+    if !st.password_ok(&f.current, client) {
+        return page(StatusCode::UNAUTHORIZED, Err("The current password is wrong."));
+    }
+    if let Err(e) = check_new_password(&f.current, &f.new, &f.confirm) {
+        return page(StatusCode::BAD_REQUEST, Err(&e));
+    }
+    // Write it to the Secret first, so a restart can't bring back the old password.
+    let secrets: Api<Secret> = Api::namespaced(st.client.clone(), &st.cfg.pod_namespace);
+    let patch = json!({ "data": { "password": k8s_openapi::ByteString(f.new.clone().into_bytes()) } });
+    if let Err(e) = secrets.patch(&st.cfg.password_secret, &PatchParams::default(), &Patch::Merge(&patch)).await {
+        tracing::warn!("could not store the new dashboard password: {e}");
+        return page(StatusCode::BAD_GATEWAY, Err("Could not save the new password (see the dashboard logs). Nothing was changed."));
+    }
+    st.set_password(&f.new, jar.get(COOKIE).map(|c| c.value()));
+    tracing::info!("dashboard password changed from {client}; other sessions logged out");
+    page(StatusCode::OK, Ok("Password changed. Other sessions have been logged out."))
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::*;
+
+    #[test]
+    fn new_password_rules() {
+        assert!(check_new_password("old-password-1", "correct horse battery", "correct horse battery").is_ok());
+        assert!(check_new_password("old", "short", "short").is_err());
+        assert!(check_new_password("old", "            ", "            ").is_err(), "whitespace only");
+        assert!(check_new_password("old", "correct horse battery", "correct horse batterY").is_err());
+        assert!(check_new_password("same-password-1", "same-password-1", "same-password-1").is_err());
+        // Length counts characters, not bytes.
+        assert!(check_new_password("old", "ééééééééééé", "ééééééééééé").is_err());
+    }
+}

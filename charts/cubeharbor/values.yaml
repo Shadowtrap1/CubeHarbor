@@ -176,6 +176,10 @@ dashboard:
   # Secret with a `password` key via `existingSecret`.
   password: ""
   existingSecret: ""
+  # -- Let a logged-in user change the password on the dashboard's Account page (it's written
+  # back to the Secret above). If `password` is set here, the next `helm upgrade` restores it.
+  # Turn off if the Secret is managed elsewhere (e.g. External Secrets).
+  allowPasswordChange: true
   # -- Namespace for servers created from the dashboard (release namespace when empty).
   defaultNamespace: ""
   # -- Extra namespaces the dashboard may manage (RBAC is granted per namespace). `["*"]` grants

@@ -99,7 +99,9 @@ kubectl -n cubeharbor get secret cubeharbor-dashboard -o jsonpath='{.data.passwo
 To choose the dashboard password yourself, add `--set-string dashboard.password='<at least 12
 characters>'` to the install (or `helm upgrade --reuse-values` later), or keep it in your own Secret
 with a `password` key and set `dashboard.existingSecret`. Without either, a random 24-character
-password is generated once and kept across upgrades.
+password is generated once and kept across upgrades. Once logged in, you can also change it on the
+dashboard's **Account** page (`dashboard.allowPasswordChange`, on by default): it's saved to the
+same Secret, and every other session is logged out.
 
 Before you expose the dashboard, read [Security notes](#security-notes) and give it an Ingress
 with TLS (`dashboard.ingress`). [`examples/values-k3s.yaml`](examples/values-k3s.yaml) is a

@@ -6,6 +6,13 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+* Dashboard: an **Account** page to change the login password (current password required,
+  at least 12 characters). It's saved to the dashboard's Secret and logs out other sessions
+  (`dashboard.allowPasswordChange`, on by default). The README now explains choosing your own
+  password at install.
+
 ### Fixed
 
 * Compose: `curseforge:`/`cf:` entries in `mods:` are rejected with a clear error instead of

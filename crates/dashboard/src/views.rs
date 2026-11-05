@@ -45,6 +45,7 @@ fn layout(title: &str, body: Markup) -> Markup {
                             @if l.new_tab { a href=(l.url) target="_blank" rel="noopener" { (l.label) } } @else { a href=(l.url) { (l.label) } }
                         }
                     }
+                    a href="/account" { "Account" }
                     form method="post" action="/logout" { button { "Log out" } }
                 }
                 main { (body) }
@@ -72,6 +73,36 @@ pub fn login(err: Option<&str>) -> Markup {
             } }
         } } }
     }
+}
+
+/// Change the dashboard password. `msg` is the outcome of a change: Ok(info) or Err(problem).
+pub fn account(changeable: bool, msg: Option<Result<&str, &str>>) -> Markup {
+    layout("Account", html! {
+        h1 { "Account" }
+        .card style="max-width:420px" {
+            h2 { "Change password" }
+            @match msg {
+                Some(Ok(m)) => { p { b { (m) } } }
+                Some(Err(e)) => { .error { (e) } }
+                None => {}
+            }
+            @if changeable {
+                form method="post" action="/account/password" {
+                    label { "Current password" } input type="password" name="current" autocomplete="current-password" required;
+                    label { "New password (at least " (crate::handlers::MIN_PASSWORD_LEN) " characters)" }
+                    input type="password" name="new" autocomplete="new-password" minlength=(crate::handlers::MIN_PASSWORD_LEN) required;
+                    label { "Repeat new password" }
+                    input type="password" name="confirm" autocomplete="new-password" minlength=(crate::handlers::MIN_PASSWORD_LEN) required;
+                    br; br; button.primary type="submit" { "Change password" }
+                }
+                p.muted { small { "Other sessions are logged out. If you set " code { "dashboard.password" } " in your Helm values, "
+                    "the next " code { "helm upgrade" } " puts that value back." } }
+            } @else {
+                p.muted { "Changing the password here is turned off. Set " code { "dashboard.password" }
+                    " (or your own Secret via " code { "dashboard.existingSecret" } ") in the Helm values." }
+            }
+        }
+    })
 }
 
 fn phase_badge(p: Phase) -> Markup {
