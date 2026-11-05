@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::net::SocketAddr;
 
 use axum::Json;
-use axum::extract::{Form, Path, Query};
+use axum::extract::{ConnectInfo, Form, Path, Query};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -65,11 +66,18 @@ pub struct LoginForm {
     password: String,
 }
 
-pub async fn login(st: St, jar: CookieJar, headers: HeaderMap, Form(f): Form<LoginForm>) -> Response {
-    if st.throttled() {
+pub async fn login(
+    st: St,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Form(f): Form<LoginForm>,
+) -> Response {
+    let client = st.client_ip(Some(peer.ip()), &headers);
+    if st.throttled(client) {
         return (StatusCode::TOO_MANY_REQUESTS, html(views::login(Some("Too many failed attempts, try again in a minute")))).into_response();
     }
-    if !st.password_ok(&f.password) {
+    if !st.password_ok(&f.password, client) {
         return (StatusCode::UNAUTHORIZED, html(views::login(Some("Wrong password")))).into_response();
     }
     let token = match st.new_session() {

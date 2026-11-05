@@ -46,6 +46,10 @@ All notable changes are listed here. The format follows
 
 ### Security
 
+* Dashboard: refuses to start with an empty `DASHBOARD_PASSWORD`. Failed logins are now
+  rate-limited per client (10/min) with a global backstop (100/min), so one client can no
+  longer lock everyone out. New `dashboard.trustedProxies` / `TRUSTED_PROXIES`, and the global
+  limit is configurable (`dashboard.loginMaxFailuresTotal` / `LOGIN_MAX_FAILURES_TOTAL`, 0 = off).
 * Gateway: forwarded TCP ports (voice chat, Bedrock over TCP, extras) now have a connection
   limit (`gateway.maxForwardConnections`, default 1024, separate from the Minecraft port's), and TCP connections idle in both directions for
   `gateway.idleTimeoutSeconds` (default 600, `IDLE_TIMEOUT_SECS`) are closed.
