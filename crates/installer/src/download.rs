@@ -159,7 +159,7 @@ fn max_download_bytes() -> u64 {
 /// Without a checksum, transport security is the only integrity check: refuse plain HTTP
 /// (including after redirects) unless `CUBEHARBOR_ALLOW_INSECURE_HTTP=true`.
 fn check_transport(url: &reqwest::Url, item: &Item) -> Result<()> {
-    let allow = std::env::var("CUBEHARBOR_ALLOW_INSECURE_HTTP").is_ok_and(|v| v == "true");
+    let allow = crate::env_flag("CUBEHARBOR_ALLOW_INSECURE_HTTP");
     if url.scheme() != "https" && !item.has_hash() && !allow {
         bail!("refusing unverified download over {}: {url} (use https, or set CUBEHARBOR_ALLOW_INSECURE_HTTP=true)", url.scheme());
     }

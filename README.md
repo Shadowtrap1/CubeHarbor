@@ -377,7 +377,10 @@ every namespace the dashboard manages.
 * **Downloads.** Files without a published checksum must come over HTTPS
   (`CUBEHARBOR_ALLOW_INSECURE_HTTP=true` in a server's `env` overrides this). Single downloads are
   capped at 8 GiB and archive extraction at 32 GiB (`CUBEHARBOR_MAX_DOWNLOAD_MIB`,
-  `CUBEHARBOR_MAX_EXTRACT_MIB`).
+  `CUBEHARBOR_MAX_EXTRACT_MIB`). Files listed in a `.mrpack` are only downloaded over HTTPS from
+  the hosts the pack format allows (`cdn.modrinth.com`, `github.com`, `raw.githubusercontent.com`,
+  `gitlab.com`), so a crafted pack can't make the installer call cluster-internal addresses
+  (`CUBEHARBOR_MRPACK_ANY_HOST=true` lifts this).
 * **Gateway.** With `gateway.acceptProxyProtocol`, list your load balancers in
   `gateway.trustedProxies`; otherwise any client can claim any source IP. Connections and UDP
   sessions per port are capped (`MAX_CONNECTIONS`, `MAX_UDP_SESSIONS`, default 4096).

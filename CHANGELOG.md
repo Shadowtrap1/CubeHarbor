@@ -6,6 +6,13 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+* Installer: `.mrpack` file downloads are restricted to HTTPS on the hosts the Modrinth pack
+  format allows; other URLs are ignored, and a file with none left fails the install
+  (`CUBEHARBOR_MRPACK_ANY_HOST=true` to opt out). Installer boolean env vars now accept
+  `1`/`yes`/`y`/`on` as well as `true`.
+
 ## [0.1.0]
 
 First public release.

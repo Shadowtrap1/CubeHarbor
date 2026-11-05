@@ -25,6 +25,11 @@ pub struct Ctx {
     pub concurrency: usize,
 }
 
+/// Is the boolean env var `name` set to a true-ish value (`true`, `1`, `yes`, `y`, `on`)?
+pub fn env_flag(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "y" | "on"))
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
