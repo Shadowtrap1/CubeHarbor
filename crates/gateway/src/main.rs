@@ -4,7 +4,6 @@
 //!   Answers pings for sleeping/starting servers itself and wakes them when someone joins.
 //! * Allocated ports: plain TCP/UDP forwarding for voice chat, Bedrock (Geyser) and extras.
 
-mod cidr;
 mod forward;
 mod minecraft;
 
@@ -13,6 +12,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Parser;
 use cubeharbor_core::MinecraftServer;
+use cubeharbor_core::cidr;
 use futures::StreamExt;
 use kube::runtime::reflector::{self, Store};
 use kube::runtime::{WatchStreamExt, watcher};

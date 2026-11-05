@@ -357,8 +357,11 @@ every namespace the dashboard manages.
 
 * **Dashboard login.** One password, generated on install and stored in a Secret; also accepted
   as a `Bearer` token for `/api/*`. Logins get a random session token that lasts 7 days and is
-  revoked on logout (and on a dashboard restart). After 10 failed password checks in a minute,
-  all password checks get `429` until the minute is over. Serve the dashboard over TLS: the cookie
+  revoked on logout (and on a dashboard restart). The dashboard refuses to start with an empty
+  password. A client with 10 failed password checks in a minute (or all clients after 100) gets
+  `429` until the minute is over. Behind an Ingress, list the ingress controller's pod CIDR in
+  `dashboard.trustedProxies` so clients are told apart by `X-Forwarded-For`; otherwise they share
+  one limit. Serve the dashboard over TLS: the cookie
   is marked `Secure` automatically when the Ingress has `tls`, or set `dashboard.cookieSecure`.
 * **Namespaces.** The dashboard only manages its default namespace plus
   `dashboard.allowedNamespaces`, and its RBAC (including `get` on Secrets for RCON) is granted

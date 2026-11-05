@@ -6,6 +6,12 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+* Dashboard: refuses to start with an empty `DASHBOARD_PASSWORD`. Failed logins are now
+  rate-limited per client (10/min) with a global backstop (100/min), so one client can no
+  longer lock everyone out. New `dashboard.trustedProxies` / `TRUSTED_PROXIES`.
+
 ## [0.1.0]
 
 First public release.

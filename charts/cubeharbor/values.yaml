@@ -184,6 +184,10 @@ dashboard:
   corsOrigins: []
   # -- Serve GET /api/v1/servers without logging in (for public status pages).
   publicServerList: false
+  # -- CIDRs of proxies in front of the dashboard (e.g. the ingress controller's pod network).
+  # Their X-Forwarded-For is believed when rate-limiting failed logins per client; without it,
+  # all clients behind the proxy share one limit.
+  trustedProxies: []
   # -- Branding, theme and form defaults of the dashboard. Every key is optional; anything left
   # out keeps the built-in default. All options with their defaults: examples/site.yaml.
   site: {}
