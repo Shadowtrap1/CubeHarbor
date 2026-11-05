@@ -72,10 +72,26 @@ pub async fn reconcile(mcs: Arc<MinecraftServer>, ctx: Arc<Ctx>) -> Result<Actio
 }
 
 async fn patch_status(api: &Api<MinecraftServer>, name: &str, status: &MinecraftServerStatus) -> Result<(), Error> {
-    api.patch_status(name, &PatchParams::default(), &Patch::Merge(json!({ "status": status })))
+    api.patch_status(name, &PatchParams::default(), &Patch::Merge(json!({ "status": status_patch(status)? })))
         .await
         .context("patching status")?;
     Ok(())
+}
+
+/// Status fields that serialization leaves out when empty.
+const CLEARABLE_STATUS_FIELDS: &[&str] =
+    &["message", "observedGeneration", "resolved", "resolvedHash", "hostnames", "service", "allocations", "players", "lastActive"];
+
+/// The status as a merge patch. A key left out of a merge patch keeps its old value, so empty
+/// fields are sent as explicit nulls; otherwise e.g. a fixed error's message would never clear.
+fn status_patch(status: &MinecraftServerStatus) -> Result<serde_json::Value> {
+    let mut v = serde_json::to_value(status)?;
+    if let Some(o) = v.as_object_mut() {
+        for field in CLEARABLE_STATUS_FIELDS {
+            o.entry(*field).or_insert(serde_json::Value::Null);
+        }
+    }
+    Ok(v)
 }
 
 /// Refuse to take over an object this MinecraftServer does not own. Server-side apply with
@@ -93,10 +109,36 @@ where
     Ok(Some(obj))
 }
 
+/// Delete objects of kind `K` this server created that are no longer wanted. Owner references
+/// only clean up when the whole MinecraftServer is deleted.
+async fn prune<K>(api: &Api<K>, mcs: &MinecraftServer, wanted: &[String]) -> Result<()>
+where
+    K: Resource<DynamicType = ()> + Clone + DeserializeOwned + std::fmt::Debug,
+{
+    let uid = mcs.uid().unwrap_or_default();
+    let selector = format!("{}={},{}={}", labels::SERVER, mcs.name_any(), labels::MANAGED_BY, labels::MANAGER);
+    for obj in api.list(&ListParams::default().labels(&selector)).await? {
+        let name = obj.name_any();
+        if stale(&obj, &uid, wanted) {
+            tracing::info!("{}/{}: deleting stale {} {name}", mcs.namespace().unwrap_or_default(), mcs.name_any(), K::kind(&()));
+            api.delete(&name, &Default::default()).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Owned by this server (by UID, so a same-named server's leftovers are never touched) and not wanted.
+fn stale<K: Resource>(obj: &K, uid: &str, wanted: &[String]) -> bool {
+    let owned = !uid.is_empty() && obj.owner_references().iter().any(|o| o.uid == uid);
+    owned && !wanted.iter().any(|w| Some(w.as_str()) == obj.meta().name.as_deref())
+}
+
 async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str, status: &mut MinecraftServerStatus) -> Result<Action> {
     let client = &ctx.client;
     let cfg = &ctx.cfg;
     let pp = PatchParams::apply(labels::FIELD_MANAGER).force();
+    cubeharbor_core::crd::check_server_name(name).map_err(anyhow::Error::msg)?;
+    mcs.spec.check_ports().map_err(anyhow::Error::msg)?;
 
     // 1. Resolve versions (network) only when the relevant spec changed.
     let spec = &mcs.spec;
@@ -193,12 +235,15 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
     let svc_api = Api::<Service>::namespaced(client.clone(), ns);
     ensure_ours(&svc_api, name, mcs).await?;
     svc_api.patch(name, &pp, &Patch::Apply(&svc)).await?;
+    let np_api = Api::<NetworkPolicy>::namespaced(client.clone(), ns);
+    let mut wanted_policies = vec![];
     if cfg.rcon_network_policy {
-        let np_api = Api::<NetworkPolicy>::namespaced(client.clone(), ns);
         let np_name = resources::network_policy_name(mcs);
         ensure_ours(&np_api, &np_name, mcs).await?;
         np_api.patch(&np_name, &pp, &Patch::Apply(&resources::network_policy(mcs, cfg)?)).await?;
+        wanted_policies.push(np_name);
     }
+    prune(&np_api, mcs, &wanted_policies).await?;
 
     // 7. mc-router's auto-scale-up wakes a sleeping server by scaling its StatefulSet to 1
     //    (we applied 0 before marking it asleep, so anything above 0 is a join attempt).
@@ -266,10 +311,14 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
 
     // 10. Ingresses for web ports.
     let ing_api: Api<Ingress> = Api::namespaced(client.clone(), ns);
+    let mut wanted_ingresses = vec![];
     for ing in resources::ingresses(mcs, cfg)? {
         ensure_ours(&ing_api, &ing.name_any(), mcs).await?;
         ing_api.patch(&ing.name_any(), &pp, &Patch::Apply(&ing)).await?;
+        wanted_ingresses.push(ing.name_any());
     }
+    // Ports that were removed, renamed or moved to another host leave their Ingress behind.
+    prune(&ing_api, mcs, &wanted_ingresses).await?;
 
     // 11. Status.
     (status.phase, status.message) = if spec.paused {
@@ -420,4 +469,77 @@ pub async fn sync_gateway_ports(ctx: &Ctx) -> Result<()> {
     }))?;
     api.patch(&cfg.gateway_ports_service, &PatchParams::apply(labels::FIELD_MANAGER).force(), &Patch::Apply(&svc)).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
+
+    fn ingress(name: &str, owner_uid: Option<&str>) -> Ingress {
+        let mut i = Ingress::default();
+        i.metadata.name = Some(name.into());
+        i.metadata.owner_references = owner_uid.map(|uid| vec![OwnerReference { uid: uid.into(), ..Default::default() }]);
+        i
+    }
+
+    #[test]
+    fn only_unwanted_owned_objects_are_stale() {
+        let wanted = vec!["atm-bluemap".to_string()];
+        assert!(!stale(&ingress("atm-bluemap", Some("u1")), "u1", &wanted));
+        assert!(stale(&ingress("atm-dynmap", Some("u1")), "u1", &wanted), "removed port");
+        assert!(!stale(&ingress("atm-dynmap", Some("u2")), "u1", &wanted), "owned by another server");
+        assert!(!stale(&ingress("atm-dynmap", None), "u1", &wanted), "not ours");
+        assert!(!stale(&ingress("atm-dynmap", Some("")), "", &wanted), "no UID yet");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cubeharbor_core::crd::{PortAllocation, Protocol, Resolved};
+
+    #[test]
+    fn status_patch_clears_empty_fields() {
+        let v = status_patch(&MinecraftServerStatus::default()).unwrap();
+        for field in CLEARABLE_STATUS_FIELDS {
+            assert_eq!(v[field], serde_json::Value::Null, "{field} should be sent as null");
+        }
+        assert_eq!(v["phase"], "Pending");
+    }
+
+    /// A new optional status field must be added to CLEARABLE_STATUS_FIELDS, or it can never be
+    /// cleared. The field list comes from the CRD schema, so a field nobody remembered still counts.
+    #[test]
+    fn every_optional_status_field_is_clearable() {
+        use kube::CustomResourceExt;
+        let crd = serde_json::to_value(MinecraftServer::crd()).unwrap();
+        let fields = crd
+            .pointer("/spec/versions/0/schema/openAPIV3Schema/properties/status/properties")
+            .and_then(|p| p.as_object())
+            .expect("status properties in the CRD schema");
+        let always = serde_json::to_value(MinecraftServerStatus::default()).unwrap();
+        for key in fields.keys() {
+            assert!(
+                always.get(key).is_some() || CLEARABLE_STATUS_FIELDS.contains(&key.as_str()),
+                "status field {key} is skipped when empty but not in CLEARABLE_STATUS_FIELDS"
+            );
+        }
+
+        let full = MinecraftServerStatus {
+            message: Some("m".into()),
+            observed_generation: Some(1),
+            resolved: Some(Resolved::default()),
+            resolved_hash: Some("h".into()),
+            hostnames: vec!["a.test".into()],
+            service: Some("s".into()),
+            allocations: vec![PortAllocation { name: "voice".into(), protocol: Protocol::Udp, container_port: 1, public_port: 2 }],
+            players: Some(Players::default()),
+            last_active: Some("t".into()),
+            ..Default::default()
+        };
+        let full = serde_json::to_value(&full).unwrap();
+        // A populated status passes through unchanged.
+        assert_eq!(status_patch(&serde_json::from_value(full.clone()).unwrap()).unwrap(), full);
+    }
 }
