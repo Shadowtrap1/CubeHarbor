@@ -108,7 +108,7 @@ async fn write(path: &Path, content: &str) -> Result<()> {
 
 /// Update keys in a Java properties file, keeping comments, ordering and unrelated keys.
 pub async fn merge_properties(path: &Path, set: &BTreeMap<String, String>) -> Result<()> {
-    let existing = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    let existing = tokio::fs::read(path).await.map(|b| decode_properties(&b)).unwrap_or_default();
     write(path, &merge_properties_text(&existing, set)).await
 }
 
@@ -134,8 +134,38 @@ pub fn merge_properties_text(existing: &str, set: &BTreeMap<String, String>) -> 
     out
 }
 
+/// Older servers wrote server.properties as ISO-8859-1; reading that as UTF-8 failed and the file
+/// was rewritten from scratch, losing every property. Fall back to Latin-1, which can't fail.
+fn decode_properties(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => bytes.iter().map(|&b| b as char).collect(),
+    }
+}
+
+/// Escape a value the way `java.util.Properties` does: control characters, a leading space, and
+/// everything outside printable ASCII as `\uXXXX`. Servers before 1.20-ish read the file as
+/// ISO-8859-1, so raw UTF-8 (`§`, emoji) turned into mojibake; escapes work on every version.
 fn escape(v: &str) -> String {
-    v.replace('\\', "\\\\").replace('\n', "\\n")
+    let mut out = String::with_capacity(v.len());
+    for (i, c) in v.chars().enumerate() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{c}' => out.push_str("\\f"),
+            ' ' if i == 0 => out.push_str("\\ "),
+            ' '..='~' => out.push(c),
+            _ => {
+                let mut units = [0u16; 2];
+                for u in c.encode_utf16(&mut units) {
+                    out.push_str(&format!("\\u{:04X}", u));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Merge players into ops.json / whitelist.json, resolving UUIDs through Mojang.
@@ -182,6 +212,23 @@ fn offline_uuid(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn properties_values_are_java_escaped() {
+        assert_eq!(escape("plain MOTD"), "plain MOTD");
+        assert_eq!(escape("§aWelcome"), r"\u00A7aWelcome");
+        assert_eq!(escape("hi 🎉"), r"hi \uD83C\uDF89");
+        assert_eq!(escape("a\\b\nc\rd"), r"a\\b\nc\rd");
+        assert_eq!(escape(" lead"), r"\ lead");
+    }
+
+    #[test]
+    fn latin1_properties_are_not_lost() {
+        // "motd=§aHi" as an old server wrote it: § is the single byte 0xA7, not valid UTF-8.
+        let text = decode_properties(b"motd=\xa7aHi\nlevel-name=world\n");
+        assert!(text.contains("level-name=world"));
+        assert!(text.contains("motd=\u{a7}aHi"));
+    }
 
     #[test]
     fn properties_merge_keeps_layout() {
