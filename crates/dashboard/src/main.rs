@@ -213,7 +213,9 @@ fn client_ip(peer: IpAddr, headers: &HeaderMap, trusted: &[cidr::Cidr]) -> IpAdd
     let hops = headers.get_all("x-forwarded-for").iter().filter_map(|v| v.to_str().ok()).flat_map(|v| v.split(',')).collect::<Vec<_>>();
     let mut client = peer;
     for hop in hops.iter().rev() {
-        let Ok(ip) = hop.trim().parse::<IpAddr>() else { break };
+        // Some proxies (e.g. Azure Application Gateway) append the client's port.
+        let hop = hop.trim();
+        let Some(ip) = hop.parse::<IpAddr>().ok().or_else(|| hop.parse::<SocketAddr>().ok().map(|a| a.ip())) else { break };
         client = ip;
         if !is_trusted(ip) {
             break;
@@ -301,7 +303,7 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,kube=warn".into()))
         .init();
     let cfg = Config::parse();
-    anyhow::ensure!(!cfg.password.is_empty(), "DASHBOARD_PASSWORD is empty: refusing to start with no login password");
+    anyhow::ensure!(!cfg.password.trim().is_empty(), "DASHBOARD_PASSWORD is empty: refusing to start with no login password");
     if cfg.password.len() < 12 {
         tracing::warn!("DASHBOARD_PASSWORD is shorter than 12 characters; use a longer one");
     }
@@ -404,6 +406,8 @@ mod tests {
         // Behind a trusted proxy, the last untrusted hop is the client; earlier entries may be forged.
         assert_eq!(client_ip(ip("10.1.1.1"), &headers("6.6.6.6, 198.51.100.7"), &trusted), ip("198.51.100.7"));
         assert_eq!(client_ip(ip("10.1.1.1"), &headers("198.51.100.7, 10.2.2.2"), &trusted), ip("198.51.100.7"));
+        assert_eq!(client_ip(ip("10.1.1.1"), &headers("198.51.100.7:51234"), &trusted), ip("198.51.100.7"));
+        assert_eq!(client_ip(ip("10.1.1.1"), &headers("[2001:db8::7]:443"), &trusted), ip("2001:db8::7"));
         // Garbage stops the walk at the last good address.
         assert_eq!(client_ip(ip("10.1.1.1"), &headers("nonsense"), &trusted), ip("10.1.1.1"));
         assert_eq!(client_ip(ip("10.1.1.1"), &HeaderMap::new(), &trusted), ip("10.1.1.1"));
