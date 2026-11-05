@@ -4,6 +4,7 @@ mod config;
 mod ports;
 mod reconcile;
 mod resources;
+mod wake;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,6 +52,8 @@ async fn main() -> Result<()> {
             }
         }
     });
+
+    tokio::spawn(wake::run(client.clone(), cfg.clone()));
 
     let (servers, sts, svc, cm, sec) = if cfg.watch_namespace.is_empty() {
         (Api::<MinecraftServer>::all(client.clone()), Api::<StatefulSet>::all(client.clone()), Api::<Service>::all(client.clone()), Api::<ConfigMap>::all(client.clone()), Api::<Secret>::all(client.clone()))

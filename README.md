@@ -398,7 +398,10 @@ every namespace the dashboard manages.
   (`CUBEHARBOR_MRPACK_ANY_HOST=true` in the server's `env` lifts this). This protects against pack
   *contents*, not against whoever edits the MinecraftServer: `modpack.url` and `mods[].url` are
   still fetched as given (HTTPS unless checksummed), so only let trusted users edit servers.
-* **Gateway.** With `gateway.acceptProxyProtocol`, list your load balancers in
+* **Gateway.** The gateway is the internet-facing component, so it can only *read*
+  MinecraftServers. To wake a sleeping server it writes one ConfigMap (`<release>-wake`, the only
+  object its RBAC lets it change), and the operator does the actual wake-up; a compromised gateway
+  can at most wake sleeping servers. With `gateway.acceptProxyProtocol`, list your load balancers in
   `gateway.trustedProxies`; otherwise any client can claim any source IP. Connections are capped
   separately for the Minecraft port (`gateway.maxConnections`, default 4096) and for all forwarded
   TCP ports together (`gateway.maxForwardConnections`, default 1024), so a flood on e.g. a web map

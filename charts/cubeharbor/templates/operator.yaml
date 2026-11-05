@@ -55,6 +55,10 @@ rules:
   - apiGroups: [""]
     resources: [services]
     verbs: [get, list, watch, create, patch, update, delete]
+  # So does the gateway's wake-request ConfigMap.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch, patch]
 {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -116,6 +120,7 @@ spec:
             - { name: WATCH_NAMESPACE, value: {{ .Values.minecraft.watchNamespace | quote }} }
             - { name: ROUTER, value: {{ .Values.router.mode | quote }} }
             - { name: GATEWAY_NAMESPACE, value: {{ .Release.Namespace | quote }} }
+            - { name: WAKE_CONFIGMAP, value: {{ printf "%s-wake" $fullname | quote }} }
             - { name: GATEWAY_PORTS_SERVICE, value: {{ printf "%s-gateway-ports" $fullname | quote }} }
             - { name: GATEWAY_SELECTOR, value: {{ printf "app.kubernetes.io/name=cubeharbor,app.kubernetes.io/instance=%s,app.kubernetes.io/component=gateway" .Release.Name | quote }} }
             - { name: GATEWAY_SERVICE_TYPE, value: {{ ternary "ClusterIP" .Values.gateway.service.type .Values.gateway.hostNetwork | quote }} }

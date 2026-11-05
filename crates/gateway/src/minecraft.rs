@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use cubeharbor_core::crd::{MINECRAFT_PORT, MinecraftServer, Phase, claim_order};
-use cubeharbor_core::labels::WAKE_ANNOTATION;
 use cubeharbor_core::protocol::{self, Handshake};
+use k8s_openapi::api::core::v1::ConfigMap;
 use kube::api::{Api, Patch, PatchParams};
 use kube::ResourceExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -202,10 +202,13 @@ async fn not_running(
     };
     if hs.next_state != 1 && wake && !recently {
         tracing::info!("waking {} for a join attempt", server.name_any());
-        let api: Api<MinecraftServer> = Api::namespaced(state.client.clone(), &server.namespace().unwrap_or_default());
+        // Recorded in the wake ConfigMap (the only object the gateway may write); the operator
+        // picks it up and starts the server.
+        let api: Api<ConfigMap> = Api::namespaced(state.client.clone(), &state.cfg.namespace);
         let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().to_string();
-        let patch = serde_json::json!({ "metadata": { "annotations": { WAKE_ANNOTATION: ts } } });
-        if let Err(e) = api.patch(&server.name_any(), &PatchParams::default(), &Patch::Merge(&patch)).await {
+        let key = cubeharbor_core::wake::key(&server.namespace().unwrap_or_default(), &server.name_any());
+        let patch = serde_json::json!({ "data": { key: ts } });
+        if let Err(e) = api.patch(&state.cfg.wake_configmap, &PatchParams::default(), &Patch::Merge(&patch)).await {
             tracing::warn!("could not wake {}: {e}", server.name_any());
         }
     }
