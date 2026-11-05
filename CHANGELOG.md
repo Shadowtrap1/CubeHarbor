@@ -9,8 +9,9 @@ All notable changes are listed here. The format follows
 ### Fixed
 
 * Hostname conflicts: when two servers claim the same hostname, or more than one sets
-  `routing.default`, the oldest keeps it. The newer one goes into `Error` with a message
-  naming the owner, and the gateway always routes to the oldest instead of picking at random.
+  `routing.default`, the oldest keeps it. The newer one keeps running without the contested hostnames (or default
+  flag) and reports the conflict in its status message. The gateway and mc-router always route
+  to the oldest instead of picking at random.
 
 ## [0.1.0]
 
