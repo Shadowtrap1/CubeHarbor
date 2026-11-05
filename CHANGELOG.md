@@ -8,6 +8,10 @@ All notable changes are listed here. The format follows
 
 ### Fixed
 
+* Hostname conflicts: when two servers claim the same hostname, or more than one sets
+  `routing.default`, the oldest keeps it. The newer one keeps running without the contested hostnames (or default
+  flag) and reports the conflict in its status message. The gateway and mc-router always route
+  to the oldest instead of picking at random.
 * Operator: Ingresses for ports that were removed, renamed or moved to another host are now
   deleted, and turning `rconNetworkPolicy` off deletes the existing per-server RCON
   NetworkPolicies.

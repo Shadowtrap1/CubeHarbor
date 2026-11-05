@@ -173,12 +173,26 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
         mcs_api.patch(name, &PatchParams::default(), &Patch::Merge(&patch)).await?;
     }
 
-    // 3. Public ports.
+    // 3. Public ports, and routing conflicts (same cluster-wide list).
+    let mut routing_conflict = None;
+    let mut is_default = spec.routing.default;
     {
         let _guard = ctx.alloc_lock.lock().await;
         let all: Api<MinecraftServer> = Api::all(client.clone());
+        let servers = all.list(&ListParams::default()).await?;
+        // Two servers on one hostname (or two defaults) would be routed to at random: the
+        // newer one gives up the contested hostnames and reports why.
+        // The server keeps running (pause, sleep and wake still apply); the conflict is reported
+        // in the status message, not as an Error phase, which the gateway would treat as down.
+        let conflicts = cubeharbor_core::crd::routing_conflicts(mcs, &status.hostnames, &servers.items);
+        if !conflicts.is_empty() {
+            status.hostnames.retain(|h| !conflicts.hostnames.iter().any(|(c, _)| c == h));
+            is_default &= conflicts.default.is_none();
+            tracing::warn!("{ns}/{name}: {}", conflicts.message());
+            routing_conflict = Some(conflicts.message());
+        }
         let mut used = Used::new();
-        for other in all.list(&ListParams::default()).await? {
+        for other in servers {
             if other.namespace().as_deref() == Some(ns) && other.name_any() == name {
                 continue;
             }
@@ -217,7 +231,7 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
     cm_api.patch(&format!("{name}-plan"), &pp, &Patch::Apply(&cm)).await?;
 
     // 6. Service.
-    let svc = resources::service(mcs, &status.hostnames, cfg)?;
+    let svc = resources::service(mcs, &status.hostnames, is_default, cfg)?;
     let svc_api = Api::<Service>::namespaced(client.clone(), ns);
     ensure_ours(&svc_api, name, mcs).await?;
     svc_api.patch(name, &pp, &Patch::Apply(&svc)).await?;
@@ -314,6 +328,12 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
     } else {
         (phase, message)
     };
+    if let Some(c) = routing_conflict {
+        status.message = Some(match status.message.take() {
+            Some(m) => format!("{c}; {m}"),
+            None => c,
+        });
+    }
     let requeue = match status.phase {
         Phase::Running => 30,
         Phase::Installing | Phase::Starting | Phase::Pending => 10,

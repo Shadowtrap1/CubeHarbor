@@ -568,6 +568,63 @@ pub fn effective_hostnames(name: &str, spec: &MinecraftServerSpec, base_domain: 
     }
 }
 
+/// Precedence when servers claim the same hostname, or more than one sets `routing.default`: the
+/// oldest server wins, then namespace and name. The operator and the gateway both use this, so
+/// routing stays predictable while a conflict is reported.
+pub fn claim_order(s: &MinecraftServer) -> impl Ord {
+    use kube::ResourceExt;
+    (s.metadata.creation_timestamp.clone(), s.namespace().unwrap_or_default(), s.name_any())
+}
+
+/// Routing claims of `me` that an earlier server (by [`claim_order`]) already holds.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RoutingConflicts {
+    /// (hostname, `namespace/name` of the server that keeps it)
+    pub hostnames: Vec<(String, String)>,
+    /// `namespace/name` of an earlier default server, when `me` also sets `routing.default`.
+    pub default: Option<String>,
+}
+
+impl RoutingConflicts {
+    pub fn is_empty(&self) -> bool {
+        self.hostnames.is_empty() && self.default.is_none()
+    }
+
+    pub fn message(&self) -> String {
+        let mut parts: Vec<String> = self.hostnames.iter().map(|(h, o)| format!("hostname {h} is already used by {o}")).collect();
+        if let Some(o) = &self.default {
+            parts.push(format!("{o} is already the default server"));
+        }
+        parts.join("; ")
+    }
+}
+
+/// Which of `hostnames` (and `routing.default`) `me` loses to servers in `others`.
+pub fn routing_conflicts<'a>(me: &MinecraftServer, hostnames: &[String], others: impl IntoIterator<Item = &'a MinecraftServer>) -> RoutingConflicts {
+    use kube::ResourceExt;
+    let mut out = RoutingConflicts::default();
+    let mine = claim_order(me);
+    for other in others {
+        if other.namespace() == me.namespace() && other.name_any() == me.name_any() {
+            continue;
+        }
+        if claim_order(other) > mine {
+            continue;
+        }
+        let owner = format!("{}/{}", other.namespace().unwrap_or_default(), other.name_any());
+        let theirs = other.status.as_ref().map(|s| s.hostnames.as_slice()).unwrap_or_default();
+        for h in hostnames.iter().filter(|h| theirs.contains(h)) {
+            if !out.hostnames.iter().any(|(x, _)| x == h) {
+                out.hostnames.push((h.clone(), owner.clone()));
+            }
+        }
+        if me.spec.routing.default && other.spec.routing.default && out.default.is_none() {
+            out.default = Some(owner);
+        }
+    }
+    out
+}
+
 /// The name an extra port gets in the pod and Service. Kubernetes allows 15 characters, and
 /// longer names have always been cut rather than rejected, so existing servers keep working.
 pub fn k8s_port_name(name: &str) -> &str {
@@ -738,3 +795,40 @@ mod tests {
         assert!(check_server_name(&"a".repeat(MAX_SERVER_NAME + 1)).is_err());
     }
 }
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+
+    fn server(name: &str, created: i64, hosts: &[&str], default: bool) -> MinecraftServer {
+        let mut spec = MinecraftServerSpec::default();
+        spec.routing.default = default;
+        let mut s = MinecraftServer::new(name, spec);
+        s.metadata.namespace = Some("mc".into());
+        s.metadata.creation_timestamp = Some(Time(k8s_openapi::jiff::Timestamp::from_second(created).unwrap()));
+        s.status = Some(MinecraftServerStatus { hostnames: hosts.iter().map(|h| h.to_string()).collect(), ..Default::default() });
+        s
+    }
+
+    #[test]
+    fn newer_server_loses_hostname_and_default() {
+        let lobby = server("lobby", 100, &["play.example.com"], true);
+        let copy = server("copy", 200, &["play.example.com", "copy.example.com"], true);
+        let c = routing_conflicts(&copy, &copy.status.as_ref().unwrap().hostnames, [&lobby, &copy]);
+        assert_eq!(c.hostnames, vec![("play.example.com".to_string(), "mc/lobby".to_string())]);
+        assert_eq!(c.default.as_deref(), Some("mc/lobby"));
+        assert!(c.message().contains("already used by mc/lobby"));
+        // The older server keeps everything.
+        assert!(routing_conflicts(&lobby, &lobby.status.as_ref().unwrap().hostnames, [&lobby, &copy]).is_empty());
+    }
+
+    #[test]
+    fn same_age_is_decided_by_name() {
+        let a = server("a", 100, &["x.example.com"], false);
+        let b = server("b", 100, &["x.example.com"], false);
+        assert!(routing_conflicts(&a, &["x.example.com".into()], [&b]).is_empty());
+        assert_eq!(routing_conflicts(&b, &["x.example.com".into()], [&a]).hostnames.len(), 1);
+    }
+}
+
