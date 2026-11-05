@@ -210,7 +210,9 @@ pub async fn ping(addr: &str, host: &str, port: u16) -> Result<Status> {
         }
         let (slen, k) = read_varint(&body[n..])?.context("truncated")?;
         let start = n + k;
-        let json = body.get(start..start + slen as usize).context("truncated status")?;
+        // A hostile server can send a negative or huge length: no arithmetic on it unchecked.
+        let end = usize::try_from(slen).ok().and_then(|l| start.checked_add(l)).context("bad status length")?;
+        let json = body.get(start..end).context("truncated status")?;
         Ok(serde_json::from_slice(json)?)
     })
     .await
@@ -250,6 +252,21 @@ pub fn proxy_v2_header(src: std::net::SocketAddr, dst: std::net::SocketAddr) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server answering a ping with a negative string length gets an error, not a panic.
+    #[tokio::test]
+    async fn ping_rejects_negative_status_length() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let _ = s.read(&mut [0u8; 512]).await;
+            let mut body = vec![0x00];
+            write_varint(&mut body, -5);
+            s.write_all(&frame(&body)).await.unwrap();
+        });
+        assert!(ping(&addr.to_string(), "x", 25565).await.is_err());
+    }
 
     #[test]
     fn varint_roundtrip() {

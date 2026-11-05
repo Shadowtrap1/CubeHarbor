@@ -6,6 +6,15 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+* Compose: `curseforge:`/`cf:` entries in `mods:` are rejected with a clear error instead of
+  being read as Modrinth project `curseforge`.
+* Installer: Quilt uses the latest stable installer, not a pre-release.
+* Player names in `ops`/`whitelist` are validated before the Mojang lookup.
+* `cubeharbor ping` / operator status pings no longer panic (debug) on a negative length from a
+  misbehaving server.
+
 ## [0.1.0]
 
 First public release.

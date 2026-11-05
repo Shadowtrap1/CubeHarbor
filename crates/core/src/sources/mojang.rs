@@ -79,7 +79,14 @@ pub struct Profile {
 }
 
 pub async fn profile(http: &Http, name: &str) -> Result<Profile> {
+    anyhow::ensure!(valid_player_name(name), "`{name}` is not a valid Java Edition player name");
     http.get_json(&format!("https://api.mojang.com/users/profiles/minecraft/{name}")).await
+}
+
+/// Java Edition names: 1-16 letters, digits or `_`. (Bedrock players via Floodgate have a prefix
+/// and no Mojang profile, so they can't be resolved here either.)
+pub fn valid_player_name(name: &str) -> bool {
+    (1..=16).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 /// `0123...` -> `01234567-89ab-...`
@@ -88,4 +95,17 @@ pub fn dashed_uuid(id: &str) -> String {
         return id.to_string();
     }
     format!("{}-{}-{}-{}-{}", &id[0..8], &id[8..12], &id[12..16], &id[16..20], &id[20..32])
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn player_names() {
+        for ok in ["Notch", "jeb_", "a", "Sixteen_chars_ab"] {
+            assert!(super::valid_player_name(ok), "{ok}");
+        }
+        for bad in ["", "seventeen_chars_x", "a/b", "../x", "a b", ".BedrockGuy", "ä"] {
+            assert!(!super::valid_player_name(bad), "{bad}");
+        }
+    }
 }

@@ -225,7 +225,7 @@ fn expand_shorthands(o: &mut Map<String, Value>) -> Result<()> {
         if let Some(v) = o.remove(key) {
             for item in v.as_array().context("`mods`/`plugins` must be a list")? {
                 mods.push(match item {
-                    Value::String(s) => mod_shorthand(s),
+                    Value::String(s) => mod_shorthand(s)?,
                     other => other.clone(),
                 });
             }
@@ -337,15 +337,21 @@ fn modpack_shorthand(s: &str) -> Result<Value> {
     })
 }
 
-fn mod_shorthand(s: &str) -> Value {
+fn mod_shorthand(s: &str) -> Result<Value> {
     if s.starts_with("http://") || s.starts_with("https://") {
-        return json!({ "url": s });
+        return Ok(json!({ "url": s }));
+    }
+    // `project:version` is also valid, so only sources we know but can't install are rejected.
+    if let Some((source, _)) = s.split_once(':')
+        && matches!(source, "curseforge" | "cf")
+    {
+        bail!("`{s}`: CurseForge mods can't be added individually; use a Modrinth project or a download URL");
     }
     let rest = s.strip_prefix("modrinth:").or_else(|| s.strip_prefix("mr:")).unwrap_or(s);
-    match rest.split_once('@').or_else(|| rest.split_once(':')) {
+    Ok(match rest.split_once('@').or_else(|| rest.split_once(':')) {
         Some((p, v)) => json!({ "modrinth": p, "version": v }),
         None => json!({ "modrinth": rest }),
-    }
+    })
 }
 
 /// `bluemap:8100`, `query:25565/udp`, `bluemap:8100@map.example.com` (ingress), `rcon:25575!internal`.
@@ -689,7 +695,9 @@ fn docker_service_to_spec(
 
     let mut mods = vec![];
     if let Some(v) = get("MODRINTH_PROJECTS") {
-        mods.extend(split_list(&v).iter().map(|m| mod_shorthand(m)));
+        for m in split_list(&v) {
+            mods.push(mod_shorthand(&m)?);
+        }
     }
     for k in ["MODS", "PLUGINS"] {
         if let Some(v) = get(k) {
@@ -919,5 +927,16 @@ services:
     fn names() {
         assert_eq!(sanitize_name("My__Cool Server!"), "my-cool-server");
         assert_eq!(sanitize_name("---"), "server");
+    }
+
+    #[test]
+    fn mod_shorthands() {
+        assert_eq!(mod_shorthand("sodium").unwrap(), json!({ "modrinth": "sodium" }));
+        assert_eq!(mod_shorthand("mr:sodium@0.5.3").unwrap(), json!({ "modrinth": "sodium", "version": "0.5.3" }));
+        assert_eq!(mod_shorthand("sodium:0.5.3").unwrap(), json!({ "modrinth": "sodium", "version": "0.5.3" }));
+        assert_eq!(mod_shorthand("https://x.example/a.jar").unwrap(), json!({ "url": "https://x.example/a.jar" }));
+        // Used to become Modrinth project `curseforge`, version `jei`.
+        assert!(mod_shorthand("curseforge:jei").is_err());
+        assert!(mod_shorthand("cf:238222").is_err());
     }
 }
