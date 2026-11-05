@@ -9,7 +9,9 @@ All notable changes are listed here. The format follows
 ### Changed
 
 * CRD: the API server now rejects MinecraftServers whose name isn't a DNS-1035 label of at most
-  52 characters (such servers could never get a Service). Re-apply the chart's CRD (`kubectl apply -f charts/cubeharbor/crds/`) when upgrading:
+  52 characters (such servers could never get a Service). An existing server with such a name
+  can no longer be updated once the new CRD is applied: delete it and recreate it under a valid
+  name (its world volume `data-<name>-0` is kept and can be copied over). Re-apply the chart's CRD (`kubectl apply -f charts/cubeharbor/crds/`) when upgrading:
   Helm does not update CRDs.
 
 ## [0.1.0]
