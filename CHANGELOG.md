@@ -6,6 +6,11 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+* Installer: removing the modpack from a server now deletes the pack's mods instead of leaving
+  them untracked in `mods/`.
+
 ## [0.1.0]
 
 First public release.
