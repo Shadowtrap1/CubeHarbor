@@ -109,6 +109,30 @@ where
     Ok(Some(obj))
 }
 
+/// Delete objects of kind `K` this server created that are no longer wanted. Owner references
+/// only clean up when the whole MinecraftServer is deleted.
+async fn prune<K>(api: &Api<K>, mcs: &MinecraftServer, wanted: &[String]) -> Result<()>
+where
+    K: Resource<DynamicType = ()> + Clone + DeserializeOwned + std::fmt::Debug,
+{
+    let uid = mcs.uid().unwrap_or_default();
+    let selector = format!("{}={},{}={}", labels::SERVER, mcs.name_any(), labels::MANAGED_BY, labels::MANAGER);
+    for obj in api.list(&ListParams::default().labels(&selector)).await? {
+        let name = obj.name_any();
+        if stale(&obj, &uid, wanted) {
+            tracing::info!("{}/{}: deleting stale {} {name}", mcs.namespace().unwrap_or_default(), mcs.name_any(), K::kind(&()));
+            api.delete(&name, &Default::default()).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Owned by this server (by UID, so a same-named server's leftovers are never touched) and not wanted.
+fn stale<K: Resource>(obj: &K, uid: &str, wanted: &[String]) -> bool {
+    let owned = !uid.is_empty() && obj.owner_references().iter().any(|o| o.uid == uid);
+    owned && !wanted.iter().any(|w| Some(w.as_str()) == obj.meta().name.as_deref())
+}
+
 async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str, status: &mut MinecraftServerStatus) -> Result<Action> {
     let client = &ctx.client;
     let cfg = &ctx.cfg;
@@ -197,12 +221,15 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
     let svc_api = Api::<Service>::namespaced(client.clone(), ns);
     ensure_ours(&svc_api, name, mcs).await?;
     svc_api.patch(name, &pp, &Patch::Apply(&svc)).await?;
+    let np_api = Api::<NetworkPolicy>::namespaced(client.clone(), ns);
+    let mut wanted_policies = vec![];
     if cfg.rcon_network_policy {
-        let np_api = Api::<NetworkPolicy>::namespaced(client.clone(), ns);
         let np_name = resources::network_policy_name(mcs);
         ensure_ours(&np_api, &np_name, mcs).await?;
         np_api.patch(&np_name, &pp, &Patch::Apply(&resources::network_policy(mcs, cfg)?)).await?;
+        wanted_policies.push(np_name);
     }
+    prune(&np_api, mcs, &wanted_policies).await?;
 
     // 7. mc-router's auto-scale-up wakes a sleeping server by scaling its StatefulSet to 1
     //    (we applied 0 before marking it asleep, so anything above 0 is a join attempt).
@@ -270,10 +297,14 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
 
     // 10. Ingresses for web ports.
     let ing_api: Api<Ingress> = Api::namespaced(client.clone(), ns);
+    let mut wanted_ingresses = vec![];
     for ing in resources::ingresses(mcs, cfg)? {
         ensure_ours(&ing_api, &ing.name_any(), mcs).await?;
         ing_api.patch(&ing.name_any(), &pp, &Patch::Apply(&ing)).await?;
+        wanted_ingresses.push(ing.name_any());
     }
+    // Ports that were removed, renamed or moved to another host leave their Ingress behind.
+    prune(&ing_api, mcs, &wanted_ingresses).await?;
 
     // 11. Status.
     (status.phase, status.message) = if spec.paused {
@@ -418,6 +449,29 @@ pub async fn sync_gateway_ports(ctx: &Ctx) -> Result<()> {
     }))?;
     api.patch(&cfg.gateway_ports_service, &PatchParams::apply(labels::FIELD_MANAGER).force(), &Patch::Apply(&svc)).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
+
+    fn ingress(name: &str, owner_uid: Option<&str>) -> Ingress {
+        let mut i = Ingress::default();
+        i.metadata.name = Some(name.into());
+        i.metadata.owner_references = owner_uid.map(|uid| vec![OwnerReference { uid: uid.into(), ..Default::default() }]);
+        i
+    }
+
+    #[test]
+    fn only_unwanted_owned_objects_are_stale() {
+        let wanted = vec!["atm-bluemap".to_string()];
+        assert!(!stale(&ingress("atm-bluemap", Some("u1")), "u1", &wanted));
+        assert!(stale(&ingress("atm-dynmap", Some("u1")), "u1", &wanted), "removed port");
+        assert!(!stale(&ingress("atm-dynmap", Some("u2")), "u1", &wanted), "owned by another server");
+        assert!(!stale(&ingress("atm-dynmap", None), "u1", &wanted), "not ours");
+        assert!(!stale(&ingress("atm-dynmap", Some("")), "", &wanted), "no UID yet");
+    }
 }
 
 #[cfg(test)]
