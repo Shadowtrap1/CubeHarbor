@@ -154,6 +154,12 @@ gateway:
   # -- CIDRs of those load balancers. PROXY headers from other peers are ignored, so players
   # can't spoof their IP. Empty = trust any peer (only safe if nothing else can reach the gateway).
   trustedProxies: []
+  # -- Close player and forwarded TCP connections after this many seconds without traffic
+  # (0 = never). Minecraft clients send keep-alives, so this only catches dead connections.
+  idleTimeoutSeconds: 600
+  # -- Concurrent connections on the Minecraft port, and on all forwarded TCP ports together.
+  maxConnections: 4096
+  maxForwardConnections: 1024
   resources:
     requests: { cpu: 50m, memory: 32Mi }
     limits: { memory: 256Mi }
@@ -165,7 +171,9 @@ gateway:
 
 dashboard:
   enabled: true
-  # -- Login password. Generated (and kept across upgrades) when empty.
+  # -- Login password, at least 12 characters recommended. Generated (and kept across upgrades)
+  # when empty. Set it here (`--set-string dashboard.password=...`), or keep it in your own
+  # Secret with a `password` key via `existingSecret`.
   password: ""
   existingSecret: ""
   # -- Namespace for servers created from the dashboard (release namespace when empty).
@@ -184,6 +192,14 @@ dashboard:
   corsOrigins: []
   # -- Serve GET /api/v1/servers without logging in (for public status pages).
   publicServerList: false
+  # -- CIDRs of proxies in front of the dashboard (e.g. the ingress controller's pod network).
+  # Their X-Forwarded-For is believed when rate-limiting failed logins per client; without it,
+  # all clients behind the proxy share one limit.
+  trustedProxies: []
+  # -- Failed logins per minute across all clients before every login gets 429 (0 = no global
+  # limit; each client is always limited to 10 a minute). Lower slows distributed guessing of a
+  # weak password; 0 means nobody can block other people's logins.
+  loginMaxFailuresTotal: 100
   # -- Branding, theme and form defaults of the dashboard. Every key is optional; anything left
   # out keeps the built-in default. All options with their defaults: examples/site.yaml.
   site: {}
