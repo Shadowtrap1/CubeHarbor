@@ -69,6 +69,13 @@ pub struct Config {
     /// YAML file with branding, theme and form defaults (see `examples/site.yaml`).
     #[arg(long, env = "SITE_CONFIG")]
     pub site_config: Option<PathBuf>,
+    /// Secret (with a `password` key) the login password comes from. When set, the password can
+    /// be changed from the dashboard, which writes it back there so it survives restarts.
+    #[arg(long, env = "PASSWORD_SECRET", default_value = "")]
+    pub password_secret: String,
+    /// Namespace of `PASSWORD_SECRET` (the dashboard's own).
+    #[arg(long, env = "POD_NAMESPACE", default_value = "")]
+    pub pod_namespace: String,
     /// Proxies (comma separated CIDRs, e.g. the ingress controller's pods) whose
     /// `X-Forwarded-For` is believed when rate-limiting failed logins. Without it, every client
     /// behind a proxy shares one limit.
@@ -88,7 +95,7 @@ pub struct AppState {
     pub remotes: Vec<(String, String)>,
     pub remote_cache: tokio::sync::Mutex<Option<api::RemoteCache>>,
     pub cors_origins: Vec<String>,
-    password_hash: [u8; 32],
+    password_hash: Mutex<[u8; 32]>,
     sessions: Mutex<HashMap<String, Instant>>,
     failures: Mutex<Failures>,
     trusted_proxies: Vec<cidr::Cidr>,
@@ -169,7 +176,7 @@ impl AppState {
 
     /// Constant-time password check that counts failures.
     pub fn password_ok(&self, pw: &str, client: IpAddr) -> bool {
-        let ok = constant_eq(&Sha256::digest(pw.as_bytes()), &self.password_hash);
+        let ok = constant_eq(&Sha256::digest(pw.as_bytes()), &*self.password_hash.lock().unwrap());
         if !ok {
             let mut f = self.failures.lock().unwrap();
             f.roll();
@@ -193,6 +200,17 @@ impl AppState {
         s.retain(|_, exp| *exp > Instant::now());
         s.insert(token.clone(), Instant::now() + SESSION_TTL);
         Ok(token)
+    }
+
+    /// Can the password be changed from the dashboard?
+    pub fn password_changeable(&self) -> bool {
+        !self.cfg.password_secret.is_empty() && !self.cfg.pod_namespace.is_empty()
+    }
+
+    /// Use `new` from now on, and log out every session except `keep`.
+    pub fn set_password(&self, new: &str, keep: Option<&str>) {
+        *self.password_hash.lock().unwrap() = Sha256::digest(new.as_bytes()).into();
+        self.sessions.lock().unwrap().retain(|t, _| Some(t.as_str()) == keep);
     }
 
     pub fn end_session(&self, token: &str) {
@@ -322,7 +340,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(AppState {
         client: Client::try_default().await?,
         http: Http::new(cfg.curseforge_api_key.clone())?,
-        password_hash: Sha256::digest(cfg.password.as_bytes()).into(),
+        password_hash: Mutex::new(Sha256::digest(cfg.password.as_bytes()).into()),
         sessions: Mutex::new(HashMap::new()),
         failures: Mutex::new(Failures::new(cfg.login_max_failures_total)),
         trusted_proxies: cidr::parse_list(&cfg.trusted_proxies)?,
@@ -338,6 +356,8 @@ async fn main() -> Result<()> {
         .route("/fragments/servers", get(servers_fragment))
         .route("/login", get(login_page).post(login))
         .route("/logout", post(logout))
+        .route("/account", get(account_page))
+        .route("/account/password", post(change_password))
         .route("/new", get(new_page))
         .route("/new/quick", post(quick_create))
         .route("/compose/preview", post(compose_preview))
