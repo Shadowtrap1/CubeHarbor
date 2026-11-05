@@ -143,9 +143,9 @@ fn service_ports(mcs: &MinecraftServer) -> Vec<Value> {
         json!({ "name": "minecraft", "port": MINECRAFT_PORT, "targetPort": MINECRAFT_PORT, "protocol": "TCP" }),
         json!({ "name": "rcon", "port": RCON_PORT, "targetPort": RCON_PORT, "protocol": "TCP" }),
     ];
+    // Names are checked by `MinecraftServerSpec::check_ports` before anything is applied.
     let mut add = |name: &str, port: u16, proto: &str| {
-        let n: String = name.chars().take(15).collect();
-        ports.push(json!({ "name": n, "port": port, "targetPort": port, "protocol": proto }));
+        ports.push(json!({ "name": cubeharbor_core::crd::k8s_port_name(name), "port": port, "targetPort": port, "protocol": proto }));
     };
     if let Some(v) = &mcs.spec.voice {
         add("voice", v.kind.container_port(), "UDP");
@@ -163,14 +163,15 @@ fn service_ports(mcs: &MinecraftServer) -> Vec<Value> {
 pub const MC_ROUTER_HOST: &str = "mc-router.itzg.me/externalServerName";
 pub const MC_ROUTER_DEFAULT: &str = "mc-router.itzg.me/defaultServer";
 
-pub fn service(mcs: &MinecraftServer, hostnames: &[String], cfg: &Config) -> Result<Service> {
+/// `default`: route unknown hostnames here (false when an older server already is the default).
+pub fn service(mcs: &MinecraftServer, hostnames: &[String], default: bool, cfg: &Config) -> Result<Service> {
     let mut metadata = meta(mcs, mcs.name_any());
     if cfg.mc_router() {
         let mut a = serde_json::Map::new();
         if !hostnames.is_empty() {
             a.insert(MC_ROUTER_HOST.into(), json!(hostnames.join(",")));
         }
-        if mcs.spec.routing.default {
+        if default {
             a.insert(MC_ROUTER_DEFAULT.into(), json!("true"));
         }
         metadata["annotations"] = Value::Object(a);
@@ -512,7 +513,7 @@ mod tests {
         let objs: Vec<Value> = vec![
             serde_json::to_value(secret(&mcs, "pw", None).unwrap()).unwrap(),
             serde_json::to_value(plan_configmap(&mcs, &plan).unwrap()).unwrap(),
-            serde_json::to_value(service(&mcs, &[], &cfg).unwrap()).unwrap(),
+            serde_json::to_value(service(&mcs, &[], false, &cfg).unwrap()).unwrap(),
             serde_json::to_value(
                 statefulset(&mcs, PodInputs { replicas: 1, image: cfg.image_for(21), plan_hash: "x".into(), existing_claims: None, cfg: &cfg }).unwrap(),
             )
@@ -559,11 +560,13 @@ mod tests {
         let (mcs, _) = sample();
         let hosts = vec!["atm.cy.example.com".to_string(), "play.example.com".to_string()];
         let gw = Config::parse_from(["op"]);
-        assert!(service(&mcs, &hosts, &gw).unwrap().metadata.annotations.is_none());
+        assert!(service(&mcs, &hosts, false, &gw).unwrap().metadata.annotations.is_none());
         let mr = Config::parse_from(["op", "--router", "mc-router"]);
-        let a = service(&mcs, &hosts, &mr).unwrap().metadata.annotations.unwrap();
+        let a = service(&mcs, &hosts, false, &mr).unwrap().metadata.annotations.unwrap();
         assert_eq!(a[MC_ROUTER_HOST], "atm.cy.example.com,play.example.com");
         assert!(!a.contains_key(MC_ROUTER_DEFAULT));
+        let a = service(&mcs, &hosts, true, &mr).unwrap().metadata.annotations.unwrap();
+        assert_eq!(a[MC_ROUTER_DEFAULT], "true");
     }
 
     #[test]
