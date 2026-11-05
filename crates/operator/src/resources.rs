@@ -143,9 +143,9 @@ fn service_ports(mcs: &MinecraftServer) -> Vec<Value> {
         json!({ "name": "minecraft", "port": MINECRAFT_PORT, "targetPort": MINECRAFT_PORT, "protocol": "TCP" }),
         json!({ "name": "rcon", "port": RCON_PORT, "targetPort": RCON_PORT, "protocol": "TCP" }),
     ];
+    // Names are checked by `MinecraftServerSpec::check_ports` before anything is applied.
     let mut add = |name: &str, port: u16, proto: &str| {
-        let n: String = name.chars().take(15).collect();
-        ports.push(json!({ "name": n, "port": port, "targetPort": port, "protocol": proto }));
+        ports.push(json!({ "name": name, "port": port, "targetPort": port, "protocol": proto }));
     };
     if let Some(v) = &mcs.spec.voice {
         add("voice", v.kind.container_port(), "UDP");

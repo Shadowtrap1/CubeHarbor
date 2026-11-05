@@ -97,6 +97,7 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
     let client = &ctx.client;
     let cfg = &ctx.cfg;
     let pp = PatchParams::apply(labels::FIELD_MANAGER).force();
+    mcs.spec.check_ports().map_err(anyhow::Error::msg)?;
 
     // 1. Resolve versions (network) only when the relevant spec changed.
     let spec = &mcs.spec;
