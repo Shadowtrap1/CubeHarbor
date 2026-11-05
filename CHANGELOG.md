@@ -12,6 +12,8 @@ All notable changes are listed here. The format follows
   holds, which left the server in `Error` with "requested twice".
 * Installer: malformed hashes in a modpack manifest are rejected instead of crashing the
   installer, and parallel downloads to `a.jar` and `a.zip` no longer share a temp file.
+* Operator: status fields that become empty are now cleared, so a fixed error's message and a
+  stopped server's player list no longer stick around.
 
 ## [0.1.0]
 
