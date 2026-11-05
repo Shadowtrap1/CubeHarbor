@@ -432,9 +432,24 @@ mod tests {
         assert_eq!(v["phase"], "Pending");
     }
 
-    /// A new optional status field must be added to CLEARABLE_STATUS_FIELDS, or it can never be cleared.
+    /// A new optional status field must be added to CLEARABLE_STATUS_FIELDS, or it can never be
+    /// cleared. The field list comes from the CRD schema, so a field nobody remembered still counts.
     #[test]
     fn every_optional_status_field_is_clearable() {
+        use kube::CustomResourceExt;
+        let crd = serde_json::to_value(MinecraftServer::crd()).unwrap();
+        let fields = crd
+            .pointer("/spec/versions/0/schema/openAPIV3Schema/properties/status/properties")
+            .and_then(|p| p.as_object())
+            .expect("status properties in the CRD schema");
+        let always = serde_json::to_value(MinecraftServerStatus::default()).unwrap();
+        for key in fields.keys() {
+            assert!(
+                always.get(key).is_some() || CLEARABLE_STATUS_FIELDS.contains(&key.as_str()),
+                "status field {key} is skipped when empty but not in CLEARABLE_STATUS_FIELDS"
+            );
+        }
+
         let full = MinecraftServerStatus {
             message: Some("m".into()),
             observed_generation: Some(1),
@@ -448,14 +463,7 @@ mod tests {
             ..Default::default()
         };
         let full = serde_json::to_value(&full).unwrap();
-        let always = serde_json::to_value(MinecraftServerStatus::default()).unwrap();
-        for key in full.as_object().unwrap().keys() {
-            assert!(
-                always.get(key).is_some() || CLEARABLE_STATUS_FIELDS.contains(&key.as_str()),
-                "status field {key} is skipped when empty but not in CLEARABLE_STATUS_FIELDS"
-            );
-        }
-        // And a populated status passes through unchanged.
+        // A populated status passes through unchanged.
         assert_eq!(status_patch(&serde_json::from_value(full.clone()).unwrap()).unwrap(), full);
     }
 }
