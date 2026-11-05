@@ -8,6 +8,12 @@ All notable changes are listed here. The format follows
 
 ### Fixed
 
+* Compose: `curseforge:`/`cf:` entries in `mods:` are rejected with a clear error instead of
+  being read as Modrinth project `curseforge`.
+* Installer: Quilt uses the latest stable installer, not a pre-release.
+* Player names in `ops`/`whitelist` are validated before the Mojang lookup.
+* `cubeharbor ping` / operator status pings no longer panic (debug) on a negative length from a
+  misbehaving server.
 * Operator: the `cubeharbor-gateway-ports` Service is no longer deleted when the last allocated
   port goes away. It keeps a placeholder port instead, so a cloud load balancer keeps its
   external IP and voice chat / Bedrock addresses keep working when ports come back.
