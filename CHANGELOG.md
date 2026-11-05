@@ -6,6 +6,11 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+* Compose import: `LEVEL` and `SEED` keep their case, so an imported world folder like
+  `MyWorld` is loaded instead of a new world being generated.
+
 ## [0.1.0]
 
 First public release.
