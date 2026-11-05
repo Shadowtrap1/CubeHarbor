@@ -279,7 +279,10 @@ curl -H "Authorization: Bearer $PW" --data-binary @network.yaml 'https://cubehar
   by default) with every allocation, and the gateway binds the matching TCP/UDP forwarders.
   Allocations are stored in each server's status and stay stable across restarts. Once created,
   the Service is kept even when no ports are allocated (with a placeholder port), so its load
-  balancer address doesn't change; delete it by hand to release the load balancer.
+  balancer address doesn't change; delete it by hand to release the load balancer. The placeholder
+  is TCP on the first port of `minecraft.portRange` (with `NodePort` it holds that node port), and
+  some cloud load balancers report its target unhealthy because nothing listens there; that's
+  expected while no ports are allocated.
 * **Simple Voice Chat** is installed from Modrinth (Fabric, Forge, NeoForge, Quilt, or the
   Paper plugin) and its `voice_host` is set to `<publicHost>:<allocated port>`, so clients
   connect without manual configuration. Plasmo Voice gets a port too; set its `host.port` to 60606.
