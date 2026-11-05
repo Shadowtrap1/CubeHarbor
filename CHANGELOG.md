@@ -13,8 +13,19 @@ All notable changes are listed here. The format follows
   (`dashboard.allowPasswordChange`, on by default; off with `existingSecret`). The README now
   explains choosing your own password at install.
 
+### Changed
+
+* CRD: the API server now rejects MinecraftServers whose name isn't a DNS-1035 label of at most
+  52 characters (such servers could never get a Service). An existing server with such a name
+  can no longer be updated once the new CRD is applied: delete it and recreate it under a valid
+  name (its world volume `data-<name>-0` is kept and can be copied over). Re-apply the chart's CRD (`kubectl apply -f charts/cubeharbor/crds/`) when upgrading:
+  Helm does not update CRDs.
+
 ### Fixed
 
+* Servers only count as ready (`Running`) once they answer a status ping. Vanilla opens its port
+  before the world is loaded, so a server used to show `Running`, and the gateway forwarded
+  players to it, while it was still preparing the spawn area.
 * Compose: `curseforge:`/`cf:` entries in `mods:` are rejected with a clear error instead of
   being read as Modrinth project `curseforge`.
 * Installer: Quilt uses the latest stable installer, not a pre-release.
@@ -53,6 +64,9 @@ All notable changes are listed here. The format follows
 
 ### Security
 
+* Gateway: no longer allowed to patch MinecraftServers. Wake-ups go through a `<release>-wake`
+  ConfigMap, the only object the gateway can write, and the operator applies them. A
+  compromised gateway can no longer change any server's spec.
 * Dashboard: refuses to start with an empty `DASHBOARD_PASSWORD`. Failed logins are now
   rate-limited per client (10/min) with a global backstop (100/min), so one client can no
   longer lock everyone out. New `dashboard.trustedProxies` / `TRUSTED_PROXIES`, and the global

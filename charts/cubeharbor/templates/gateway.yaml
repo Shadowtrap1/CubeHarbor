@@ -11,10 +11,11 @@ metadata:
   name: {{ $fullname }}-gateway
   labels: {{- include "cubeharbor.labels" . | nindent 4 }}
 rules:
-  # Read routes; patch is only used to set the wake-up annotation when a player joins.
+  # Read routes only. The gateway faces the internet, so it can't change servers: wake-ups go
+  # through the ConfigMap below, which the operator turns into a wake annotation.
   - apiGroups: [cubeharbor.dev]
     resources: [minecraftservers]
-    verbs: [get, list, watch, patch]
+    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -24,6 +25,38 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
+  name: {{ $fullname }}-gateway
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-gateway
+    namespace: {{ .Release.Namespace }}
+---
+# Wake requests (`<namespace>_<name>`: unix time), written by the gateway, consumed by the operator.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-wake
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-gateway
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [{{ $fullname }}-wake]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-gateway
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
   name: {{ $fullname }}-gateway
 subjects:
   - kind: ServiceAccount
@@ -74,6 +107,9 @@ spec:
             - { name: IDLE_TIMEOUT_SECS, value: {{ .Values.gateway.idleTimeoutSeconds | quote }} }
             - { name: MAX_CONNECTIONS, value: {{ .Values.gateway.maxConnections | quote }} }
             - { name: MAX_FORWARD_CONNECTIONS, value: {{ .Values.gateway.maxForwardConnections | quote }} }
+            - { name: WAKE_CONFIGMAP, value: {{ printf "%s-wake" $fullname | quote }} }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
           ports:
             - { name: minecraft, containerPort: 25565, protocol: TCP }
             - { name: health, containerPort: 8081, protocol: TCP }

@@ -36,6 +36,9 @@ pub struct Config {
     /// Service the operator manages for allocated ports.
     #[arg(long, env = "GATEWAY_PORTS_SERVICE", default_value = "cubeharbor-gateway-ports")]
     pub gateway_ports_service: String,
+    /// ConfigMap (in the gateway namespace) the gateway records wake requests in.
+    #[arg(long, env = "WAKE_CONFIGMAP", default_value = cubeharbor_core::wake::DEFAULT_CONFIGMAP)]
+    pub wake_configmap: String,
     /// Gateway pod labels, `k=v,k=v`.
     #[arg(long, env = "GATEWAY_SELECTOR", default_value = "app.kubernetes.io/component=gateway")]
     pub gateway_selector: String,

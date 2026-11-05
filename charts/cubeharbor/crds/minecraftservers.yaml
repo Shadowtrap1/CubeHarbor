@@ -492,6 +492,9 @@ spec:
         - spec
         title: MinecraftServer
         type: object
+        x-kubernetes-validations:
+        - message: 'metadata.name must be a DNS-1035 label of at most 52 characters: lower-case letters, digits and ''-'', starting with a letter'
+          rule: self.metadata.name.size() <= 52 && self.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')
     served: true
     storage: true
     subresources:
