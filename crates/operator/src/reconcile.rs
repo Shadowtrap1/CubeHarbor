@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use cubeharbor_core::crd::{
-    MINECRAFT_PORT, MinecraftServer, MinecraftServerStatus, Phase, Players, effective_hostnames,
+    MINECRAFT_PORT, MinecraftServer, MinecraftServerStatus, Phase, Players, PortAllocation, effective_hostnames,
 };
 use cubeharbor_core::labels;
 use cubeharbor_core::plan::hash_json;
@@ -336,32 +336,44 @@ pub fn error_policy(_mcs: Arc<MinecraftServer>, err: &Error, _ctx: Arc<Ctx>) -> 
     Action::requeue(Duration::from_secs(30))
 }
 
+/// One Service port per allocated (port, protocol).
+fn gateway_service_ports<'a>(allocations: impl Iterator<Item = &'a PortAllocation>) -> Vec<serde_json::Value> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut ports = vec![];
+    for a in allocations {
+        if seen.insert((a.public_port, a.protocol)) {
+            let proto = a.protocol.as_str();
+            ports.push(json!({
+                "name": format!("p{}-{}", a.public_port, &proto[..1].to_ascii_lowercase()),
+                "port": a.public_port,
+                "targetPort": a.public_port,
+                "protocol": proto,
+            }));
+        }
+    }
+    ports
+}
+
+fn placeholder_port(port: u16) -> serde_json::Value {
+    json!({ "name": "placeholder", "port": port, "targetPort": port, "protocol": "TCP" })
+}
+
 /// Keep the gateway's extra-ports Service in sync with all allocations.
 pub async fn sync_gateway_ports(ctx: &Ctx) -> Result<()> {
     let cfg = &ctx.cfg;
     let all: Api<MinecraftServer> = Api::all(ctx.client.clone());
-    let mut ports = vec![];
-    let mut seen = std::collections::BTreeSet::new();
-    for m in all.list(&ListParams::default()).await? {
-        for a in m.status.iter().flat_map(|s| &s.allocations) {
-            if seen.insert((a.public_port, a.protocol)) {
-                let proto = a.protocol.as_str();
-                ports.push(json!({
-                    "name": format!("p{}-{}", a.public_port, &proto[..1].to_ascii_lowercase()),
-                    "port": a.public_port,
-                    "targetPort": a.public_port,
-                    "protocol": proto,
-                }));
-            }
-        }
-    }
+    let servers = all.list(&ListParams::default()).await?;
+    let allocations = servers.iter().flat_map(|m| m.status.iter().flat_map(|s| &s.allocations));
+    let mut ports = gateway_service_ports(allocations);
     let api: Api<Service> = Api::namespaced(ctx.client.clone(), &cfg.gateway_namespace);
     if ports.is_empty() {
-        // A Service needs at least one port.
-        if api.get_opt(&cfg.gateway_ports_service).await?.is_some() {
-            api.delete(&cfg.gateway_ports_service, &Default::default()).await?;
+        // A Service needs at least one port. Rather than deleting it (and losing the load
+        // balancer address players and DNS records point at), keep it with a placeholder port
+        // nothing listens on until ports are allocated again.
+        if api.get_opt(&cfg.gateway_ports_service).await?.is_none() {
+            return Ok(());
         }
-        return Ok(());
+        ports = vec![placeholder_port(cfg.port_range().0)];
     }
     let annotations: serde_json::Value = serde_json::from_str(&cfg.gateway_service_annotations).unwrap_or(json!({}));
     let mut spec = json!({
@@ -400,4 +412,24 @@ pub async fn sync_gateway_ports(ctx: &Ctx) -> Result<()> {
     }))?;
     api.patch(&cfg.gateway_ports_service, &PatchParams::apply(labels::FIELD_MANAGER).force(), &Patch::Apply(&svc)).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod gateway_ports_tests {
+    use super::*;
+    use cubeharbor_core::crd::Protocol;
+
+    fn alloc(port: u16, protocol: Protocol) -> PortAllocation {
+        PortAllocation { name: "x".into(), protocol, container_port: 1, public_port: port }
+    }
+
+    #[test]
+    fn one_service_port_per_port_and_protocol() {
+        let allocs = [alloc(25600, Protocol::Udp), alloc(25600, Protocol::Tcp), alloc(25600, Protocol::Udp)];
+        let ports = gateway_service_ports(allocs.iter());
+        let names: Vec<&str> = ports.iter().map(|p| p["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["p25600-u", "p25600-t"]);
+        assert!(gateway_service_ports([].iter()).is_empty());
+        assert_eq!(placeholder_port(25600)["protocol"], "TCP");
+    }
 }

@@ -6,6 +6,12 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+* Operator: the `cubeharbor-gateway-ports` Service is no longer deleted when the last allocated
+  port goes away. It keeps a placeholder port instead, so a cloud load balancer keeps its
+  external IP and voice chat / Bedrock addresses keep working when ports come back.
+
 ## [0.1.0]
 
 First public release.
