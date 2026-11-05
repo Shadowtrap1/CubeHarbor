@@ -277,7 +277,12 @@ curl -H "Authorization: Bearer $PW" --data-binary @network.yaml 'https://cubehar
 * **Voice chat, Bedrock and extra ports** get a public port from `minecraft.portRange`, or a
   pinned `publicPort`. The operator maintains a `cubeharbor-gateway-ports` Service (LoadBalancer
   by default) with every allocation, and the gateway binds the matching TCP/UDP forwarders.
-  Allocations are stored in each server's status and stay stable across restarts.
+  Allocations are stored in each server's status and stay stable across restarts. Once created,
+  the Service is kept even when no ports are allocated (with a placeholder port), so its load
+  balancer address doesn't change; delete it by hand to release the load balancer. The placeholder
+  is TCP on the first port of `minecraft.portRange` (with `NodePort` it holds that node port), and
+  some cloud load balancers report its target unhealthy because nothing listens there; that's
+  expected while no ports are allocated.
 * **Simple Voice Chat** is installed from Modrinth (Fabric, Forge, NeoForge, Quilt, or the
   Paper plugin) and its `voice_host` is set to `<publicHost>:<allocated port>`, so clients
   connect without manual configuration. Plasmo Voice gets a port too; set its `host.port` to 60606.
@@ -377,7 +382,12 @@ every namespace the dashboard manages.
 * **Downloads.** Files without a published checksum must come over HTTPS
   (`CUBEHARBOR_ALLOW_INSECURE_HTTP=true` in a server's `env` overrides this). Single downloads are
   capped at 8 GiB and archive extraction at 32 GiB (`CUBEHARBOR_MAX_DOWNLOAD_MIB`,
-  `CUBEHARBOR_MAX_EXTRACT_MIB`).
+  `CUBEHARBOR_MAX_EXTRACT_MIB`). Files listed in a `.mrpack` are only downloaded over HTTPS from
+  the hosts the pack format allows (`cdn.modrinth.com`, `github.com`, `raw.githubusercontent.com`,
+  `gitlab.com`), so a crafted pack can't make the installer call cluster-internal addresses
+  (`CUBEHARBOR_MRPACK_ANY_HOST=true` in the server's `env` lifts this). This protects against pack
+  *contents*, not against whoever edits the MinecraftServer: `modpack.url` and `mods[].url` are
+  still fetched as given (HTTPS unless checksummed), so only let trusted users edit servers.
 * **Gateway.** With `gateway.acceptProxyProtocol`, list your load balancers in
   `gateway.trustedProxies`; otherwise any client can claim any source IP. Connections are capped
   separately for the Minecraft port (`gateway.maxConnections`, default 4096) and for all forwarded
