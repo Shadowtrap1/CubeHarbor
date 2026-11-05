@@ -74,6 +74,11 @@ pub struct Config {
     /// behind a proxy shares one limit.
     #[arg(long, env = "TRUSTED_PROXIES", default_value = "")]
     pub trusted_proxies: String,
+    /// Failed password checks per minute across all clients before every login gets 429
+    /// (0 = no global limit; each client is still limited to 10 a minute). The global limit
+    /// slows a distributed guesser but also lets one block new logins for everyone.
+    #[arg(long, env = "LOGIN_MAX_FAILURES_TOTAL", default_value_t = 100)]
+    pub login_max_failures_total: u32,
 }
 
 pub struct AppState {
@@ -94,22 +99,28 @@ struct Failures {
     window: Instant,
     total: u32,
     per_client: HashMap<IpAddr, u32>,
+    /// Limit across all clients (`LOGIN_MAX_FAILURES_TOTAL`), 0 = none.
+    max_total: u32,
 }
 
 impl Failures {
-    fn new() -> Self {
-        Self { window: Instant::now(), total: 0, per_client: HashMap::new() }
+    fn new(max_total: u32) -> Self {
+        Self { window: Instant::now(), total: 0, per_client: HashMap::new(), max_total }
     }
 
     /// Start a new window once the minute is over.
     fn roll(&mut self) {
         if self.window.elapsed() >= FAILURE_WINDOW {
-            *self = Self::new();
+            *self = Self::new(self.max_total);
         }
     }
 
     fn limited(&self, client: IpAddr) -> bool {
-        self.total >= MAX_FAILURES_TOTAL || self.per_client.get(&bucket(client)).is_some_and(|n| *n >= MAX_FAILURES_PER_CLIENT)
+        let key = bucket(client);
+        (self.max_total > 0 && self.total >= self.max_total)
+            || self.per_client.get(&key).is_some_and(|n| *n >= MAX_FAILURES_PER_CLIENT)
+            // Without a global limit, cap the memory a flood of distinct clients can use.
+            || (self.per_client.len() >= MAX_TRACKED_CLIENTS && !self.per_client.contains_key(&key))
     }
 
     fn record(&mut self, client: IpAddr) -> u32 {
@@ -136,8 +147,8 @@ pub const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 const FAILURE_WINDOW: Duration = Duration::from_secs(60);
 /// Failed password checks (login form and Bearer) allowed per minute from one client.
 const MAX_FAILURES_PER_CLIENT: u32 = 10;
-/// ...and from all clients together, so a botnet can't try thousands of passwords a minute.
-const MAX_FAILURES_TOTAL: u32 = 100;
+/// Distinct clients tracked per window; new ones beyond this are throttled.
+const MAX_TRACKED_CLIENTS: usize = 100_000;
 
 pub type St = State<Arc<AppState>>;
 
@@ -313,7 +324,7 @@ async fn main() -> Result<()> {
         http: Http::new(cfg.curseforge_api_key.clone())?,
         password_hash: Sha256::digest(cfg.password.as_bytes()).into(),
         sessions: Mutex::new(HashMap::new()),
-        failures: Mutex::new(Failures::new()),
+        failures: Mutex::new(Failures::new(cfg.login_max_failures_total)),
         trusted_proxies: cidr::parse_list(&cfg.trusted_proxies)?,
         remotes: api::parse_remotes(&cfg.remotes),
         remote_cache: tokio::sync::Mutex::new(None),
@@ -416,7 +427,7 @@ mod tests {
     #[test]
     fn failures_are_counted_per_client() {
         let ip = |s: &str| s.parse::<IpAddr>().unwrap();
-        let mut f = Failures::new();
+        let mut f = Failures::new(100);
         for _ in 0..MAX_FAILURES_PER_CLIENT {
             f.record(ip("192.0.2.1"));
         }
@@ -430,9 +441,13 @@ mod tests {
         }
         assert!(f.limited(ip("2001:db8::ffff")));
         assert!(!f.limited(ip("2001:db8:0:1::1")));
-        // Past the global cap, everyone waits.
-        f.total = MAX_FAILURES_TOTAL;
+        // Past the global cap, everyone waits...
+        f.total = 100;
         assert!(f.limited(ip("192.0.2.2")));
+        // ...unless the global cap is turned off.
+        f.max_total = 0;
+        assert!(!f.limited(ip("192.0.2.2")));
+        assert!(f.limited(ip("192.0.2.1")), "the per-client limit still applies");
     }
 
     #[test]

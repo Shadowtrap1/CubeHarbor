@@ -135,6 +135,7 @@ spec:
             - { name: CORS_ORIGINS, value: {{ join "," .Values.dashboard.corsOrigins | quote }} }
             - { name: PUBLIC_SERVER_LIST, value: {{ .Values.dashboard.publicServerList | quote }} }
             - { name: TRUSTED_PROXIES, value: {{ join "," .Values.dashboard.trustedProxies | quote }} }
+            - { name: LOGIN_MAX_FAILURES_TOTAL, value: {{ .Values.dashboard.loginMaxFailuresTotal | quote }} }
             - { name: ALLOWED_NAMESPACES, value: {{ ternary "*" (include "cubeharbor.dashboardNamespaces" .) $all | quote }} }
             - { name: COOKIE_SECURE, value: {{ .Values.dashboard.cookieSecure | default (and .Values.dashboard.ingress.enabled (not (empty .Values.dashboard.ingress.tls))) | quote }} }
             - { name: SITE_CONFIG, value: /etc/cubeharbor-dashboard/site.yaml }

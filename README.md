@@ -96,6 +96,11 @@ kubectl -n cubeharbor port-forward svc/cubeharbor-dashboard 8080:80
 kubectl -n cubeharbor get secret cubeharbor-dashboard -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
+To choose the dashboard password yourself, add `--set-string dashboard.password='<at least 12
+characters>'` to the install (or `helm upgrade --reuse-values` later), or keep it in your own Secret
+with a `password` key and set `dashboard.existingSecret`. Without either, a random 24-character
+password is generated once and kept across upgrades.
+
 Before you expose the dashboard, read [Security notes](#security-notes) and give it an Ingress
 with TLS (`dashboard.ingress`). [`examples/values-k3s.yaml`](examples/values-k3s.yaml) is a
 complete values file for a home-lab cluster. Every option is documented in
@@ -363,8 +368,10 @@ every namespace the dashboard manages.
 * **Dashboard login.** One password, generated on install and stored in a Secret; also accepted
   as a `Bearer` token for `/api/*`. Logins get a random session token that lasts 7 days and is
   revoked on logout (and on a dashboard restart). The dashboard refuses to start with an empty
-  password. A client with 10 failed password checks in a minute (or all clients after 100) gets
-  `429` until the minute is over. Behind an Ingress, list the ingress controller's pod CIDR in
+  password. A client with 10 failed password checks in a minute gets `429` until the minute is
+  over, and so does everyone once 100 failures a minute come in overall
+  (`dashboard.loginMaxFailuresTotal`; 0 turns the overall limit off, so nobody can block other
+  people's logins). Behind an Ingress, list the ingress controller's pod CIDR in
   `dashboard.trustedProxies` so clients are told apart by `X-Forwarded-For`; otherwise they share
   one limit. Serve the dashboard over TLS: the cookie
   is marked `Secure` automatically when the Ingress has `tls`, or set `dashboard.cookieSecure`.

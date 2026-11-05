@@ -171,7 +171,9 @@ gateway:
 
 dashboard:
   enabled: true
-  # -- Login password. Generated (and kept across upgrades) when empty.
+  # -- Login password, at least 12 characters recommended. Generated (and kept across upgrades)
+  # when empty. Set it here (`--set-string dashboard.password=...`), or keep it in your own
+  # Secret with a `password` key via `existingSecret`.
   password: ""
   existingSecret: ""
   # -- Namespace for servers created from the dashboard (release namespace when empty).
@@ -194,6 +196,10 @@ dashboard:
   # Their X-Forwarded-For is believed when rate-limiting failed logins per client; without it,
   # all clients behind the proxy share one limit.
   trustedProxies: []
+  # -- Failed logins per minute across all clients before every login gets 429 (0 = no global
+  # limit; each client is always limited to 10 a minute). Lower slows distributed guessing of a
+  # weak password; 0 means nobody can block other people's logins.
+  loginMaxFailuresTotal: 100
   # -- Branding, theme and form defaults of the dashboard. Every key is optional; anything left
   # out keeps the built-in default. All options with their defaults: examples/site.yaml.
   site: {}
