@@ -135,8 +135,16 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
     {
         let _guard = ctx.alloc_lock.lock().await;
         let all: Api<MinecraftServer> = Api::all(client.clone());
+        let servers = all.list(&ListParams::default()).await?;
+        // Two servers on one hostname (or two defaults) would be routed to at random: the
+        // newer one gives up the contested hostnames and reports why.
+        let conflicts = cubeharbor_core::crd::routing_conflicts(mcs, &status.hostnames, &servers.items);
+        if !conflicts.is_empty() {
+            status.hostnames.retain(|h| !conflicts.hostnames.iter().any(|(c, _)| c == h));
+            anyhow::bail!("{}", conflicts.message());
+        }
         let mut used = Used::new();
-        for other in all.list(&ListParams::default()).await? {
+        for other in servers {
             if other.namespace().as_deref() == Some(ns) && other.name_any() == name {
                 continue;
             }
