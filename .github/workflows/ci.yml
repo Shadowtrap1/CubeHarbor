@@ -22,7 +22,7 @@ jobs:
         run: |
           cargo run -q -p cubeharbor -- crd > /tmp/crd.yaml
           diff -u charts/cubeharbor/crds/minecraftservers.yaml /tmp/crd.yaml
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - run: helm lint charts/cubeharbor && helm template t charts/cubeharbor > /dev/null
 
   images:
@@ -53,7 +53,7 @@ jobs:
     permissions: { contents: read, packages: write }
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Package and push
         env:
           OWNER: ${{ github.repository_owner }}
