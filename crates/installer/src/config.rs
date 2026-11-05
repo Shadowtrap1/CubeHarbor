@@ -29,7 +29,7 @@ pub async fn apply(ctx: &Ctx, plan: &InstallPlan, loader: Loader, state: &mut In
     if !plan.whitelist.is_empty() {
         props.insert("white-list".into(), "true".into());
         props.insert("enforce-whitelist".into(), "true".into());
-    } else if !state.managed_whitelist.is_empty() {
+    } else if state.managed_whitelist.as_ref().is_some_and(|m| !m.is_empty()) {
         // The spec's whitelist was emptied: turn off what we turned on.
         props.insert("white-list".into(), "false".into());
         props.insert("enforce-whitelist".into(), "false".into());
@@ -47,17 +47,18 @@ pub async fn apply(ctx: &Ctx, plan: &InstallPlan, loader: Loader, state: &mut In
     merge_properties(&ctx.root.join("server.properties"), &props).await?;
 
     let online = plan.properties.get("online-mode").is_none_or(|v| v != "false");
-    if !plan.ops.is_empty() || !state.managed_ops.is_empty() {
-        state.managed_ops = players_file(ctx, "ops.json", &plan.ops, &state.managed_ops, online, |e| {
+    if !plan.ops.is_empty() || state.managed_ops.as_ref().is_some_and(|m| !m.is_empty()) {
+        state.managed_ops = Some(players_file(ctx, "ops.json", &plan.ops, state.managed_ops.as_deref(), online, |e| {
             if let Some(o) = e.as_object_mut() {
                 o.entry("level").or_insert(json!(4));
                 o.entry("bypassesPlayerLimit").or_insert(json!(false));
             }
         })
-        .await;
+        .await);
     }
-    if !plan.whitelist.is_empty() || !state.managed_whitelist.is_empty() {
-        state.managed_whitelist = players_file(ctx, "whitelist.json", &plan.whitelist, &state.managed_whitelist, online, |_| {}).await;
+    if !plan.whitelist.is_empty() || state.managed_whitelist.as_ref().is_some_and(|m| !m.is_empty()) {
+        state.managed_whitelist =
+            Some(players_file(ctx, "whitelist.json", &plan.whitelist, state.managed_whitelist.as_deref(), online, |_| {}).await);
     }
 
     if let Some(v) = &plan.voice {
@@ -145,14 +146,14 @@ fn escape(v: &str) -> String {
 /// Merge players into ops.json / whitelist.json, resolving UUIDs through Mojang. Players in
 /// `previous` (what the spec managed last time) that are no longer in `names` are removed.
 /// Returns the names now managed.
-async fn players_file(ctx: &Ctx, file: &str, names: &[String], previous: &[String], online: bool, extra: impl Fn(&mut Value)) -> Vec<String> {
+async fn players_file(ctx: &Ctx, file: &str, names: &[String], previous: Option<&[String]>, online: bool, extra: impl Fn(&mut Value)) -> Vec<String> {
     let path = ctx.root.join(file);
     let mut list: Vec<Value> = tokio::fs::read_to_string(&path)
         .await
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    let removed = remove_unmanaged(&mut list, names, previous);
+    let removed = remove_unmanaged(&mut list, names, previous.unwrap_or_default());
     if !removed.is_empty() {
         tracing::info!("{file}: removed {} (no longer in the spec)", removed.join(", "));
     }
@@ -184,8 +185,11 @@ async fn players_file(ctx: &Ctx, file: &str, names: &[String], previous: &[Strin
 
 /// Names the spec manages after this run: the ones it managed before, plus the ones it adds now.
 /// A player who was already in the file (e.g. op'd in-game) before the spec listed them stays
-/// unmanaged, so taking them out of the spec later doesn't remove them.
-fn newly_managed(list: &[Value], names: &[String], previous: &[String]) -> Vec<String> {
+/// unmanaged, so taking them out of the spec later doesn't remove them. Without a record
+/// (`previous` is `None`, state from before this tracking), the older installer put every spec
+/// name into the file itself, so they are all adopted.
+fn newly_managed(list: &[Value], names: &[String], previous: Option<&[String]>) -> Vec<String> {
+    let Some(previous) = previous else { return names.iter().map(|n| n.to_ascii_lowercase()).collect() };
     let present = |n: &str| list.iter().any(|e| e["name"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(n)));
     names
         .iter()
@@ -238,7 +242,10 @@ mod tests {
         assert_eq!(left, ["Alice", "InGameOp"], "players added in-game are never removed");
         // InGameOp now also appears in the spec: they were there first, so the spec doesn't take them over.
         let names = vec!["alice".to_string(), "ingameop".to_string(), "newbie".to_string()];
-        assert_eq!(newly_managed(&list, &names, &["alice".to_string()]), ["alice", "newbie"]);
+        assert_eq!(newly_managed(&list, &names, Some(&["alice".to_string()])), ["alice", "newbie"]);
+        // Upgrading from an installer without tracking: the spec's names are adopted, so a
+        // later removal works (they were written by cubeharbor, not op'd in-game).
+        assert_eq!(newly_managed(&list, &names, None), ["alice", "ingameop", "newbie"]);
     }
 
     #[test]

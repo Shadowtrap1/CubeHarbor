@@ -99,11 +99,12 @@ pub struct InstallState {
     #[serde(default)]
     pub loader: Option<Loader>,
     /// Players (lower-case) the spec put into ops.json / whitelist.json, so they can be removed
-    /// again when they leave the spec. Players added in-game are never touched.
+    /// again when they leave the spec. Players added in-game are never touched. `None` means the
+    /// state predates this tracking: the spec's names already in the file are then adopted.
     #[serde(default)]
-    pub managed_ops: Vec<String>,
+    pub managed_ops: Option<Vec<String>>,
     #[serde(default)]
-    pub managed_whitelist: Vec<String>,
+    pub managed_whitelist: Option<Vec<String>>,
 }
 
 /// Stable FNV-1a hash used for change detection (not security).
