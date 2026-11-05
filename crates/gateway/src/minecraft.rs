@@ -84,7 +84,7 @@ async fn handle(state: Arc<State>, mut client: TcpStream, mut peer: SocketAddr) 
         upstream.write_all(&protocol::proxy_v2_header(peer, local)).await?;
     }
     upstream.write_all(&buf).await?;
-    tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
+    crate::pipe::relay(&mut client, &mut upstream, state.idle_timeout()).await?;
     Ok(())
 }
 

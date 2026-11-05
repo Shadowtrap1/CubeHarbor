@@ -46,6 +46,9 @@ All notable changes are listed here. The format follows
 
 ### Security
 
+* Gateway: forwarded TCP ports (voice chat, Bedrock over TCP, extras) now have a connection
+  limit (`gateway.maxForwardConnections`, default 1024, separate from the Minecraft port's), and TCP connections idle in both directions for
+  `gateway.idleTimeoutSeconds` (default 600, `IDLE_TIMEOUT_SECS`) are closed.
 * Installer: `.mrpack` file downloads are restricted to HTTPS on the hosts the Modrinth pack
   format allows; other URLs are ignored, and a file with none left fails the install
   (`CUBEHARBOR_MRPACK_ANY_HOST=true` to opt out). Installer boolean env vars now accept

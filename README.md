@@ -389,8 +389,12 @@ every namespace the dashboard manages.
   *contents*, not against whoever edits the MinecraftServer: `modpack.url` and `mods[].url` are
   still fetched as given (HTTPS unless checksummed), so only let trusted users edit servers.
 * **Gateway.** With `gateway.acceptProxyProtocol`, list your load balancers in
-  `gateway.trustedProxies`; otherwise any client can claim any source IP. Connections and UDP
-  sessions per port are capped (`MAX_CONNECTIONS`, `MAX_UDP_SESSIONS`, default 4096).
+  `gateway.trustedProxies`; otherwise any client can claim any source IP. Connections are capped
+  separately for the Minecraft port (`gateway.maxConnections`, default 4096) and for all forwarded
+  TCP ports together (`gateway.maxForwardConnections`, default 1024), so a flood on e.g. a web map
+  port can't block logins; UDP sessions are capped per port (`MAX_UDP_SESSIONS`, default 4096).
+  TCP connections with no traffic for `gateway.idleTimeoutSeconds` (default 600) are closed,
+  which also cuts quiet WebSocket UIs on forwarded ports; raise it or set 0 if that matters.
 * Operator, gateway and dashboard run as non-root with a read-only root filesystem on distroless images.
 
 ## Contributing
