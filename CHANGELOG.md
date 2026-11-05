@@ -6,6 +6,12 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+* Hostname conflicts: when two servers claim the same hostname, or more than one sets
+  `routing.default`, the oldest keeps it. The newer one goes into `Error` with a message
+  naming the owner, and the gateway always routes to the oldest instead of picking at random.
+
 ## [0.1.0]
 
 First public release.
