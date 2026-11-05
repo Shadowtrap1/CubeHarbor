@@ -125,7 +125,10 @@ pub fn merge_properties_text(existing: &str, set: &BTreeMap<String, String>) -> 
             out.push_str(&format!("{}={}\n", k.trim(), escape(&v)));
             continue;
         }
-        out.push_str(line);
+        // Lines we don't manage are kept as they are, but must stay ASCII too: an old server
+        // reads the file as ISO-8859-1, so a decoded `é` written back as UTF-8 would change e.g.
+        // `level-name` into a different world folder.
+        out.push_str(&ascii_only(line));
         out.push('\n');
     }
     for (k, v) in remaining {
@@ -157,15 +160,26 @@ fn escape(v: &str) -> String {
             '\u{c}' => out.push_str("\\f"),
             ' ' if i == 0 => out.push_str("\\ "),
             ' '..='~' => out.push(c),
-            _ => {
-                let mut units = [0u16; 2];
-                for u in c.encode_utf16(&mut units) {
-                    out.push_str(&format!("\\u{:04X}", u));
-                }
-            }
+            _ => push_unicode_escape(&mut out, c),
         }
     }
     out
+}
+
+/// `line` with only its non-ASCII characters escaped (existing escapes are left alone).
+fn ascii_only(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    for c in line.chars() {
+        if c.is_ascii() { out.push(c) } else { push_unicode_escape(&mut out, c) }
+    }
+    out
+}
+
+fn push_unicode_escape(out: &mut String, c: char) {
+    let mut units = [0u16; 2];
+    for u in c.encode_utf16(&mut units) {
+        out.push_str(&format!("\\u{:04X}", u));
+    }
 }
 
 /// Merge players into ops.json / whitelist.json, resolving UUIDs through Mojang.
@@ -228,6 +242,10 @@ mod tests {
         let text = decode_properties(b"motd=\xa7aHi\nlevel-name=world\n");
         assert!(text.contains("level-name=world"));
         assert!(text.contains("motd=\u{a7}aHi"));
+        // Lines we don't manage come back ASCII-only, so an ISO-8859-1 reader sees the same name.
+        let text = decode_properties(b"level-name=Welt\xe9\nmotd=old\n");
+        let set = BTreeMap::from([("motd".to_string(), "new".to_string())]);
+        assert_eq!(merge_properties_text(&text, &set), "level-name=Welt\\u00E9\nmotd=new\n");
     }
 
     #[test]
