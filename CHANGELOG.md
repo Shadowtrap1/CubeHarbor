@@ -13,6 +13,7 @@ All notable changes are listed here. The format follows
   can no longer be updated once the new CRD is applied: delete it and recreate it under a valid
   name (its world volume `data-<name>-0` is kept and can be copied over). Re-apply the chart's CRD (`kubectl apply -f charts/cubeharbor/crds/`) when upgrading:
   Helm does not update CRDs.
+
 ### Fixed
 
 * Compose: `curseforge:`/`cf:` entries in `mods:` are rejected with a clear error instead of
