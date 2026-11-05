@@ -8,6 +8,8 @@ All notable changes are listed here. The format follows
 
 ### Fixed
 
+* Compose import: `LEVEL` and `SEED` keep their case, so an imported world folder like
+  `MyWorld` is loaded instead of a new world being generated.
 * Port allocation: a new or newly pinned port no longer collides with a port the server already
   holds, which left the server in `Error` with "requested twice".
 * Installer: malformed hashes in a modpack manifest are rejected instead of crashing the
