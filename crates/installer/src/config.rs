@@ -156,6 +156,7 @@ async fn players_file(ctx: &Ctx, file: &str, names: &[String], previous: &[Strin
     if !removed.is_empty() {
         tracing::info!("{file}: removed {} (no longer in the spec)", removed.join(", "));
     }
+    let managed = newly_managed(&list, names, previous);
     for name in names {
         if list.iter().any(|e| e["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(name))) {
             continue;
@@ -178,7 +179,19 @@ async fn players_file(ctx: &Ctx, file: &str, names: &[String], previous: &[Strin
     if let Ok(s) = serde_json::to_string_pretty(&list) {
         let _ = write(&path, &s).await;
     }
-    names.iter().map(|n| n.to_ascii_lowercase()).collect()
+    managed
+}
+
+/// Names the spec manages after this run: the ones it managed before, plus the ones it adds now.
+/// A player who was already in the file (e.g. op'd in-game) before the spec listed them stays
+/// unmanaged, so taking them out of the spec later doesn't remove them.
+fn newly_managed(list: &[Value], names: &[String], previous: &[String]) -> Vec<String> {
+    let present = |n: &str| list.iter().any(|e| e["name"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(n)));
+    names
+        .iter()
+        .filter(|n| previous.iter().any(|p| p.eq_ignore_ascii_case(n)) || !present(n))
+        .map(|n| n.to_ascii_lowercase())
+        .collect()
 }
 
 /// Drop entries the spec added before (`previous`) but no longer lists. Returns their names.
@@ -223,6 +236,9 @@ mod tests {
         assert_eq!(remove_unmanaged(&mut list, &names, &previous), vec!["griefer"]);
         let left: Vec<&str> = list.iter().map(|e| e["name"].as_str().unwrap()).collect();
         assert_eq!(left, ["Alice", "InGameOp"], "players added in-game are never removed");
+        // InGameOp now also appears in the spec: they were there first, so the spec doesn't take them over.
+        let names = vec!["alice".to_string(), "ingameop".to_string(), "newbie".to_string()];
+        assert_eq!(newly_managed(&list, &names, &["alice".to_string()]), ["alice", "newbie"]);
     }
 
     #[test]
