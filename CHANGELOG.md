@@ -6,6 +6,12 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+* CRD: the API server now rejects MinecraftServers whose name isn't a DNS-1035 label of at most
+  52 characters (such servers could never get a Service). Re-apply the chart's CRD (`kubectl apply -f charts/cubeharbor/crds/`) when upgrading:
+  Helm does not update CRDs.
+
 ## [0.1.0]
 
 First public release.

@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use kube::CustomResource;
+use kube::{CustomResource, KubeSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -16,8 +16,13 @@ pub const SIMPLE_VOICE_CHAT_PORT: u16 = 24454;
 pub const PLASMO_VOICE_PORT: u16 = 60606;
 pub const GEYSER_PORT: u16 = 19132;
 
-#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
+#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, Default, KubeSchema, PartialEq)]
 #[kube(
+    // Checked by the API server, so `kubectl apply` rejects a bad name instead of the operator
+    // reporting an error later. Keep in sync with `check_server_name`. (Names are immutable, so
+    // this can't break updates of existing objects that were valid before.)
+    validation = Rule::new("self.metadata.name.size() <= 52 && self.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')")
+        .message("metadata.name must be a DNS-1035 label of at most 52 characters: lower-case letters, digits and '-', starting with a letter"),
     group = "cubeharbor.dev",
     version = "v1alpha1",
     kind = "MinecraftServer",
