@@ -72,10 +72,26 @@ pub async fn reconcile(mcs: Arc<MinecraftServer>, ctx: Arc<Ctx>) -> Result<Actio
 }
 
 async fn patch_status(api: &Api<MinecraftServer>, name: &str, status: &MinecraftServerStatus) -> Result<(), Error> {
-    api.patch_status(name, &PatchParams::default(), &Patch::Merge(json!({ "status": status })))
+    api.patch_status(name, &PatchParams::default(), &Patch::Merge(json!({ "status": status_patch(status)? })))
         .await
         .context("patching status")?;
     Ok(())
+}
+
+/// Status fields that serialization leaves out when empty.
+const CLEARABLE_STATUS_FIELDS: &[&str] =
+    &["message", "observedGeneration", "resolved", "resolvedHash", "hostnames", "service", "allocations", "players", "lastActive"];
+
+/// The status as a merge patch. A key left out of a merge patch keeps its old value, so empty
+/// fields are sent as explicit nulls; otherwise e.g. a fixed error's message would never clear.
+fn status_patch(status: &MinecraftServerStatus) -> Result<serde_json::Value> {
+    let mut v = serde_json::to_value(status)?;
+    if let Some(o) = v.as_object_mut() {
+        for field in CLEARABLE_STATUS_FIELDS {
+            o.entry(*field).or_insert(serde_json::Value::Null);
+        }
+    }
+    Ok(v)
 }
 
 /// Refuse to take over an object this MinecraftServer does not own. Server-side apply with
@@ -121,6 +137,8 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
     let client = &ctx.client;
     let cfg = &ctx.cfg;
     let pp = PatchParams::apply(labels::FIELD_MANAGER).force();
+    cubeharbor_core::crd::check_server_name(name).map_err(anyhow::Error::msg)?;
+    mcs.spec.check_ports().map_err(anyhow::Error::msg)?;
 
     // 1. Resolve versions (network) only when the relevant spec changed.
     let spec = &mcs.spec;
@@ -453,5 +471,55 @@ mod prune_tests {
         assert!(!stale(&ingress("atm-dynmap", Some("u2")), "u1", &wanted), "owned by another server");
         assert!(!stale(&ingress("atm-dynmap", None), "u1", &wanted), "not ours");
         assert!(!stale(&ingress("atm-dynmap", Some("")), "", &wanted), "no UID yet");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cubeharbor_core::crd::{PortAllocation, Protocol, Resolved};
+
+    #[test]
+    fn status_patch_clears_empty_fields() {
+        let v = status_patch(&MinecraftServerStatus::default()).unwrap();
+        for field in CLEARABLE_STATUS_FIELDS {
+            assert_eq!(v[field], serde_json::Value::Null, "{field} should be sent as null");
+        }
+        assert_eq!(v["phase"], "Pending");
+    }
+
+    /// A new optional status field must be added to CLEARABLE_STATUS_FIELDS, or it can never be
+    /// cleared. The field list comes from the CRD schema, so a field nobody remembered still counts.
+    #[test]
+    fn every_optional_status_field_is_clearable() {
+        use kube::CustomResourceExt;
+        let crd = serde_json::to_value(MinecraftServer::crd()).unwrap();
+        let fields = crd
+            .pointer("/spec/versions/0/schema/openAPIV3Schema/properties/status/properties")
+            .and_then(|p| p.as_object())
+            .expect("status properties in the CRD schema");
+        let always = serde_json::to_value(MinecraftServerStatus::default()).unwrap();
+        for key in fields.keys() {
+            assert!(
+                always.get(key).is_some() || CLEARABLE_STATUS_FIELDS.contains(&key.as_str()),
+                "status field {key} is skipped when empty but not in CLEARABLE_STATUS_FIELDS"
+            );
+        }
+
+        let full = MinecraftServerStatus {
+            message: Some("m".into()),
+            observed_generation: Some(1),
+            resolved: Some(Resolved::default()),
+            resolved_hash: Some("h".into()),
+            hostnames: vec!["a.test".into()],
+            service: Some("s".into()),
+            allocations: vec![PortAllocation { name: "voice".into(), protocol: Protocol::Udp, container_port: 1, public_port: 2 }],
+            players: Some(Players::default()),
+            last_active: Some("t".into()),
+            ..Default::default()
+        };
+        let full = serde_json::to_value(&full).unwrap();
+        // A populated status passes through unchanged.
+        assert_eq!(status_patch(&serde_json::from_value(full.clone()).unwrap()).unwrap(), full);
     }
 }

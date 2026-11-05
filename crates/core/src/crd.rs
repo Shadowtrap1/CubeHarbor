@@ -568,6 +568,50 @@ pub fn effective_hostnames(name: &str, spec: &MinecraftServerSpec, base_domain: 
     }
 }
 
+/// The name an extra port gets in the pod and Service. Kubernetes allows 15 characters, and
+/// longer names have always been cut rather than rejected, so existing servers keep working.
+pub fn k8s_port_name(name: &str) -> &str {
+    name.get(..15).unwrap_or(name)
+}
+
+/// A Kubernetes port name (IANA service name): at most 15 lower-case alphanumerics or `-`,
+/// with at least one letter, no leading/trailing `-` and no `--`.
+fn check_port_name(name: &str) -> Result<(), String> {
+    let ok = !name.is_empty()
+        && name.len() <= 15
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && name.chars().any(|c| c.is_ascii_lowercase())
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && !name.contains("--");
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("port name `{name}` must be 1-15 lower-case letters, digits or `-`, with at least one letter"))
+    }
+}
+
+/// Longest server name: the StatefulSet's `controller-revision-hash` label is `<name>-<10-char hash>`
+/// and labels are limited to 63 characters.
+pub const MAX_SERVER_NAME: usize = 52;
+
+/// Can `name` be used for the server's StatefulSet and Service? Services need a DNS-1035 label
+/// (lower-case alphanumerics and `-`, starting with a letter).
+pub fn check_server_name(name: &str) -> Result<(), String> {
+    let ok = name.starts_with(|c: char| c.is_ascii_lowercase())
+        && !name.ends_with('-')
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !ok {
+        return Err(format!(
+            "server name `{name}` is not a valid DNS-1035 label: use lower-case letters, digits and `-`, starting with a letter"
+        ));
+    }
+    if name.len() > MAX_SERVER_NAME {
+        return Err(format!("server name `{name}` is longer than {MAX_SERVER_NAME} characters"));
+    }
+    Ok(())
+}
+
 /// Lower-case, strip a trailing dot and any port.
 pub fn normalize_host(h: &str) -> String {
     let h = h.trim().trim_end_matches('.');
@@ -614,5 +658,83 @@ impl MinecraftServerSpec {
             }
         }
         out
+    }
+
+    /// Check the ports every server pod and Service gets: port names (after the cut to 15
+    /// characters, see [`k8s_port_name`]) must be valid Kubernetes port names and unique, and no
+    /// two may share a container port and protocol. The API server would otherwise reject the
+    /// Service and StatefulSet.
+    pub fn check_ports(&self) -> Result<(), String> {
+        let mut ports: Vec<(&str, u16, Protocol)> = vec![("minecraft", MINECRAFT_PORT, Protocol::Tcp), ("rcon", RCON_PORT, Protocol::Tcp)];
+        if let Some(v) = &self.voice {
+            ports.push(("voice", v.kind.container_port(), Protocol::Udp));
+        }
+        if self.geyser.is_some() {
+            ports.push(("bedrock", GEYSER_PORT, Protocol::Udp));
+        }
+        for p in &self.extra_ports {
+            let name = k8s_port_name(&p.name);
+            check_port_name(name).map_err(|e| if name == p.name { e } else { format!("{e} (`{}` is cut to 15 characters)", p.name) })?;
+            ports.push((name, p.container_port, p.protocol));
+        }
+        let (mut names, mut numbers) = (std::collections::HashSet::new(), std::collections::HashSet::new());
+        for (name, port, proto) in ports {
+            if !names.insert(name) {
+                return Err(format!(
+                    "port name `{name}` is used twice (names are cut to 15 characters; minecraft, rcon, voice and bedrock are reserved)"
+                ));
+            }
+            if !numbers.insert((port, proto)) {
+                return Err(format!("container port {port}/{} is used twice (port `{name}`)", proto.as_str()));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_checks() {
+        let port = |name: &str, container_port: u16| ExtraPort {
+            name: name.into(),
+            container_port,
+            protocol: Protocol::Tcp,
+            expose: Exposure::Gateway,
+            public_port: None,
+            host: None,
+        };
+        let with = |ports: Vec<ExtraPort>| MinecraftServerSpec { extra_ports: ports, ..Default::default() };
+        assert!(with(vec![port("bluemap", 8100), port("dynmap", 8123)]).check_ports().is_ok());
+        // Long names are cut to 15 characters, as before: one alone is fine...
+        assert!(with(vec![port("bluemap-web-http", 8100)]).check_ports().is_ok());
+        // ...but two that are cut to the same `bluemap-web-htt` collide.
+        assert!(with(vec![port("bluemap-web-http", 8100), port("bluemap-web-https", 8101)]).check_ports().is_err());
+        // The cut can leave an invalid name.
+        assert!(with(vec![port("bluemap-webmap-", 8100)]).check_ports().is_err());
+        assert!(with(vec![port("bluemap-webmap-x", 8100)]).check_ports().is_err());
+        assert!(with(vec![port("BlueMap", 8100)]).check_ports().is_err());
+        assert!(with(vec![port("8100", 8100)]).check_ports().is_err());
+        assert!(with(vec![port("map", 8100), port("map", 8101)]).check_ports().is_err());
+        assert!(with(vec![port("rcon", 8100)]).check_ports().is_err(), "built-in names are reserved");
+        assert!(with(vec![port("a", 8100), port("b", 8100)]).check_ports().is_err());
+        assert!(with(vec![port("game", MINECRAFT_PORT)]).check_ports().is_err());
+        let mut voice = with(vec![ExtraPort { protocol: Protocol::Udp, ..port("vc", SIMPLE_VOICE_CHAT_PORT) }]);
+        assert!(voice.check_ports().is_ok());
+        voice.voice = Some(VoiceSpec { kind: VoiceKind::SimpleVoiceChat, install: true, public_port: None });
+        assert!(voice.check_ports().is_err());
+    }
+
+    #[test]
+    fn server_names() {
+        assert!(check_server_name("lobby").is_ok());
+        assert!(check_server_name("atm-10").is_ok());
+        assert!(check_server_name("2b2t").is_err(), "Services must start with a letter");
+        assert!(check_server_name("Lobby").is_err());
+        assert!(check_server_name("lobby-").is_err());
+        assert!(check_server_name(&"a".repeat(MAX_SERVER_NAME)).is_ok());
+        assert!(check_server_name(&"a".repeat(MAX_SERVER_NAME + 1)).is_err());
     }
 }
