@@ -19,6 +19,32 @@ const CLIENT_ONLY: &[&str] = &[
     "konkrete", "mainmenucredits", "betterpingdisplay", "torohealth", "physicsmod", "dynamiclights",
 ];
 
+/// Hosts `.mrpack` files may download from, per the Modrinth pack format. Anything else could
+/// point the installer at cluster-internal services or cloud metadata endpoints.
+const MRPACK_HOSTS: &[&str] = &["cdn.modrinth.com", "github.com", "raw.githubusercontent.com", "gitlab.com"];
+
+/// Keep only download URLs the pack format allows (HTTPS on `MRPACK_HOSTS`), unless
+/// `CUBEHARBOR_MRPACK_ANY_HOST` is set.
+fn allowed_downloads(path: &str, urls: &[String], any_host: bool) -> Result<Vec<String>> {
+    if any_host {
+        return Ok(urls.to_vec());
+    }
+    let allowed = |u: &String| {
+        cubeharbor_core::reqwest::Url::parse(u)
+            .is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some_and(|h| MRPACK_HOSTS.contains(&h)) && u.port().is_none())
+    };
+    let ok: Vec<String> = urls.iter().filter(|u| allowed(u)).cloned().collect();
+    for u in urls.iter().filter(|u| !allowed(u)) {
+        tracing::warn!("  {path}: ignoring download URL outside the allowed hosts: {u}");
+    }
+    anyhow::ensure!(
+        !ok.is_empty(),
+        "{path}: no download URL on an allowed host ({}); set CUBEHARBOR_MRPACK_ANY_HOST=true in the server's env to allow any",
+        MRPACK_HOSTS.join(", ")
+    );
+    Ok(ok)
+}
+
 pub struct PackResult {
     pub minecraft_version: Option<String>,
     pub loader: Option<(Loader, String)>,
@@ -127,6 +153,7 @@ async fn mrpack(ctx: &Ctx, archive: &std::path::Path, exclude: &[String], includ
         .collect();
     let client_only = client_only_files(ctx, &candidates, include).await;
 
+    let any_host = crate::env_flag("CUBEHARBOR_MRPACK_ANY_HOST");
     let mut items = vec![];
     let mut files = vec![];
     for f in &index.files {
@@ -143,7 +170,7 @@ async fn mrpack(ctx: &Ctx, archive: &std::path::Path, exclude: &[String], includ
         }
         let dest = safe_join(&ctx.root, &f.path)?;
         items.push(Item {
-            urls: f.downloads.clone(),
+            urls: allowed_downloads(&f.path, &f.downloads, any_host)?,
             dest,
             sha1: f.hashes.sha1.clone(),
             sha256: None,
@@ -240,5 +267,25 @@ mod tests {
         assert!(!excluded("config/oculus.toml/mods", "jei"));
         assert!(is_client_only("mods/embeddium-0.3.jar"));
         assert!(!is_client_only("mods/create-0.5.jar"));
+    }
+
+    #[test]
+    fn mrpack_download_hosts() {
+        let urls = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let ok = urls(&["https://cdn.modrinth.com/data/AANobbMI/versions/x/sodium.jar"]);
+        assert_eq!(allowed_downloads("mods/a.jar", &ok, false).unwrap(), ok);
+        // Disallowed mirrors are dropped as long as one allowed URL remains.
+        let mixed = urls(&["http://169.254.169.254/latest/meta-data/", "https://github.com/o/r/releases/download/v1/a.jar"]);
+        assert_eq!(allowed_downloads("mods/a.jar", &mixed, false).unwrap(), urls(&["https://github.com/o/r/releases/download/v1/a.jar"]));
+        for bad in [
+            "http://cdn.modrinth.com/a.jar",
+            "https://cdn.modrinth.com.evil.example/a.jar",
+            "https://evil.example/cdn.modrinth.com/a.jar",
+            "https://cdn.modrinth.com:8443/a.jar",
+            "https://some-svc.other-ns.svc:8080/admin",
+        ] {
+            assert!(allowed_downloads("mods/a.jar", &urls(&[bad]), false).is_err(), "{bad}");
+        }
+        assert!(allowed_downloads("mods/a.jar", &urls(&["https://my.mirror.example/a.jar"]), true).is_ok());
     }
 }
