@@ -198,9 +198,15 @@ pub struct StatusVersion {
 
 /// Server List Ping a server and return its status.
 pub async fn ping(addr: &str, host: &str, port: u16) -> Result<Status> {
+    ping_with_prefix(addr, host, port, &[]).await
+}
+
+/// [`ping`], sending `prefix` (e.g. a PROXY protocol header) before the handshake.
+pub async fn ping_with_prefix(addr: &str, host: &str, port: u16, prefix: &[u8]) -> Result<Status> {
     tokio::time::timeout(Duration::from_secs(5), async {
         let mut s = TcpStream::connect(addr).await?;
-        let mut out = encode_handshake(-1, host, port, 1);
+        let mut out = prefix.to_vec();
+        out.extend(encode_handshake(-1, host, port, 1));
         out.extend(frame(&[0x00]));
         s.write_all(&out).await?;
         let body = read_packet(&mut s, 1 << 20).await?;
@@ -266,6 +272,26 @@ mod tests {
             s.write_all(&frame(&body)).await.unwrap();
         });
         assert!(ping(&addr.to_string(), "x", 25565).await.is_err());
+    }
+
+    /// A ping can lead with a PROXY v2 header, for servers that drop connections without one.
+    #[tokio::test]
+    async fn ping_with_proxy_header() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 512];
+            let n = s.read(&mut buf).await.unwrap();
+            // Like a proxy-protocol server: no header, no answer.
+            if !buf[..n].starts_with(b"\r\n\r\n\0\r\nQUIT\n") {
+                return;
+            }
+            s.write_all(&status_response(&status_json(767, "test", "hi", 0, 1))).await.unwrap();
+        });
+        let header = proxy_v2_header(addr, addr);
+        let st = ping_with_prefix(&addr.to_string(), "localhost", addr.port(), &header).await.unwrap();
+        assert_eq!(st.version.unwrap().name, "test");
     }
 
     #[test]

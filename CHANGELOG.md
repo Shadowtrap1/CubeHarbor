@@ -16,6 +16,9 @@ All notable changes are listed here. The format follows
 
 ### Fixed
 
+* Servers only count as ready (`Running`) once they answer a status ping. Vanilla opens its port
+  before the world is loaded, so a server used to show `Running`, and the gateway forwarded
+  players to it, while it was still preparing the spawn area.
 * Compose: `curseforge:`/`cf:` entries in `mods:` are rejected with a clear error instead of
   being read as Modrinth project `curseforge`.
 * Installer: Quilt uses the latest stable installer, not a pre-release.

@@ -38,6 +38,21 @@ const AIKAR_SMALL: &[&str] = &["-XX:G1NewSizePercent=30", "-XX:G1MaxNewSizePerce
 
 #[tokio::main]
 async fn main() {
+    // `cubeharbor-runner probe`: the readiness probe. Vanilla opens its port before the world is
+    // loaded, so an open port doesn't mean players can join; a status ping does.
+    if std::env::args().nth(1).as_deref() == Some("probe") {
+        let port = cubeharbor_core::crd::MINECRAFT_PORT;
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        // A server set up for PROXY protocol drops connections without the header.
+        let prefix = if proxy_protocol() { cubeharbor_core::protocol::proxy_v2_header(addr, addr) } else { vec![] };
+        match cubeharbor_core::protocol::ping_with_prefix(&addr.to_string(), "localhost", port, &prefix).await {
+            Ok(_) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("not ready: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
     tracing_subscriber::fmt().with_target(false).init();
     match run().await {
         Ok(code) => std::process::exit(code),
@@ -46,6 +61,15 @@ async fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// Does the install plan say the server expects a PROXY protocol header (`routing.proxyProtocol`)?
+fn proxy_protocol() -> bool {
+    let path = env("CUBEHARBOR_PLAN").unwrap_or_else(|| plan::PLAN_PATH.into());
+    std::fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<plan::InstallPlan>(&b).ok())
+        .is_some_and(|p| p.proxy_protocol)
 }
 
 fn env(key: &str) -> Option<String> {
