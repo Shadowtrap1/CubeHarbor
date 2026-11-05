@@ -8,6 +8,9 @@ All notable changes are listed here. The format follows
 
 ### Fixed
 
+* Installer: players removed from `ops` or `whitelist` in the spec are now removed from
+  `ops.json` / `whitelist.json` (players added in-game are left alone), and emptying the
+  whitelist turns `white-list` off again. Only players removed after this version are cleaned up.
 * Hostname conflicts: when two servers claim the same hostname, or more than one sets
   `routing.default`, the oldest keeps it. The newer one keeps running without the contested hostnames (or default
   flag) and reports the conflict in its status message. The gateway and mc-router always route
