@@ -378,7 +378,9 @@ every namespace the dashboard manages.
   (`CUBEHARBOR_ALLOW_INSECURE_HTTP=true` in a server's `env` overrides this). Single downloads are
   capped at 8 GiB and archive extraction at 32 GiB (`CUBEHARBOR_MAX_DOWNLOAD_MIB`,
   `CUBEHARBOR_MAX_EXTRACT_MIB`).
-* **Gateway.** With `gateway.acceptProxyProtocol`, list your load balancers in
+* **Gateway.** The gateway is the internet-facing component, so it can only *read*
+  MinecraftServers. To wake a sleeping server it writes one ConfigMap (`<release>-wake`, the only
+  object its RBAC lets it change), and the operator does the actual wake-up. With `gateway.acceptProxyProtocol`, list your load balancers in
   `gateway.trustedProxies`; otherwise any client can claim any source IP. Connections and UDP
   sessions per port are capped (`MAX_CONNECTIONS`, `MAX_UDP_SESSIONS`, default 4096).
 * Operator, gateway and dashboard run as non-root with a read-only root filesystem on distroless images.

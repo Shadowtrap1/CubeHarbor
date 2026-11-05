@@ -42,6 +42,12 @@ pub struct Config {
     /// Concurrent Minecraft connections, across all clients.
     #[arg(long, env = "MAX_CONNECTIONS", default_value_t = 4096)]
     pub max_connections: usize,
+    /// Namespace the gateway runs in (where its wake ConfigMap lives).
+    #[arg(long, env = "POD_NAMESPACE", default_value = cubeharbor_core::defaults::NAMESPACE)]
+    pub namespace: String,
+    /// ConfigMap the gateway records wake requests in (see `cubeharbor_core::wake`).
+    #[arg(long, env = "WAKE_CONFIGMAP", default_value = cubeharbor_core::wake::DEFAULT_CONFIGMAP)]
+    pub wake_configmap: String,
     /// Concurrent UDP sessions per forwarded port.
     #[arg(long, env = "MAX_UDP_SESSIONS", default_value_t = 4096)]
     pub max_udp_sessions: usize,

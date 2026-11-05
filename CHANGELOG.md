@@ -6,6 +6,12 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+* Gateway: no longer allowed to patch MinecraftServers. Wake-ups go through a `<release>-wake`
+  ConfigMap, the only object the gateway can write, and the operator applies them. A
+  compromised gateway can no longer change any server's spec.
+
 ## [0.1.0]
 
 First public release.
