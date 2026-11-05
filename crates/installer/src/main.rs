@@ -95,7 +95,8 @@ async fn run() -> Result<()> {
         save(&state_path, &state).await?;
     }
 
-    config::apply(&ctx, &plan, loader).await?;
+    config::apply(&ctx, &plan, loader, &mut state).await?;
+    save(&state_path, &state).await?;
     let _ = tokio::fs::remove_dir_all(ctx.root.join(plan::STATE_DIR).join("downloads")).await;
     tracing::info!("server {} ready: Minecraft {mc} on {loader}", plan.server_name);
     Ok(())

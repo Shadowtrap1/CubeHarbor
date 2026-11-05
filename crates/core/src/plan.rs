@@ -98,6 +98,12 @@ pub struct InstallState {
     pub minecraft_version: Option<String>,
     #[serde(default)]
     pub loader: Option<Loader>,
+    /// Players (lower-case) the spec put into ops.json / whitelist.json, so they can be removed
+    /// again when they leave the spec. Players added in-game are never touched.
+    #[serde(default)]
+    pub managed_ops: Vec<String>,
+    #[serde(default)]
+    pub managed_whitelist: Vec<String>,
 }
 
 /// Stable FNV-1a hash used for change detection (not security).
