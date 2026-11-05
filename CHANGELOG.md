@@ -8,6 +8,9 @@ All notable changes are listed here. The format follows
 
 ### Fixed
 
+* Operator: port names and container ports are checked before anything is applied, so colliding
+  or invalid ports (e.g. two long names cut to the same 15 characters, or an extra port reusing
+  the voice chat port) give a clear status message instead of repeated API errors.
 * Server names that start with a digit (e.g. `2b2t`) are prefixed with `mc-` on compose import
   and quick create, and the operator reports invalid or too long names (Services need a
   DNS-1035 label of at most 52 characters here) instead of failing halfway through a reconcile.

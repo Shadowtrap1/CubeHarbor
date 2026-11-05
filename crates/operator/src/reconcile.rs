@@ -114,6 +114,7 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
     let cfg = &ctx.cfg;
     let pp = PatchParams::apply(labels::FIELD_MANAGER).force();
     cubeharbor_core::crd::check_server_name(name).map_err(anyhow::Error::msg)?;
+    mcs.spec.check_ports().map_err(anyhow::Error::msg)?;
 
     // 1. Resolve versions (network) only when the relevant spec changed.
     let spec = &mcs.spec;

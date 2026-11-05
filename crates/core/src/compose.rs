@@ -394,11 +394,8 @@ fn validate(name: &str, spec: &MinecraftServerSpec, warnings: &mut Vec<String>) 
     if spec.modpack.is_none() && spec.version.is_none() {
         warnings.push(format!("server `{name}`: no version given, the latest release will be used"));
     }
-    let mut seen = std::collections::HashSet::new();
-    for p in &spec.extra_ports {
-        if !seen.insert(&p.name) {
-            warnings.push(format!("server `{name}`: duplicate port name `{}`", p.name));
-        }
+    if let Err(e) = spec.check_ports() {
+        warnings.push(format!("server `{name}`: {e}"));
     }
 }
 
