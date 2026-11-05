@@ -47,6 +47,14 @@ pub async fn apply(ctx: &Ctx, plan: &InstallPlan, loader: Loader, state: &mut In
     merge_properties(&ctx.root.join("server.properties"), &props).await?;
 
     let online = plan.properties.get("online-mode").is_none_or(|v| v != "false");
+    // With an empty spec list nothing in the files came from cubeharbor, so start tracking now;
+    // otherwise a player op'd in-game and later added to the spec would be adopted as managed.
+    if plan.ops.is_empty() {
+        state.managed_ops.get_or_insert_with(Vec::new);
+    }
+    if plan.whitelist.is_empty() {
+        state.managed_whitelist.get_or_insert_with(Vec::new);
+    }
     if !plan.ops.is_empty() || state.managed_ops.as_ref().is_some_and(|m| !m.is_empty()) {
         state.managed_ops = Some(players_file(ctx, "ops.json", &plan.ops, state.managed_ops.as_deref(), online, |e| {
             if let Some(o) = e.as_object_mut() {
