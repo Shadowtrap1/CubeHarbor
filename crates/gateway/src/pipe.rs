@@ -39,7 +39,8 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut buf = vec![0u8; 16 * 1024];
+    // 8 KiB like `copy_bidirectional`: two per connection, times thousands of connections.
+    let mut buf = vec![0u8; 8 * 1024];
     loop {
         let n = r.read(&mut buf).await?;
         if n == 0 {
