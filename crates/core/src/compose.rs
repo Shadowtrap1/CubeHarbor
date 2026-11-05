@@ -119,7 +119,7 @@ fn parse_doc(doc: &Value) -> Result<ComposeOutput> {
     }
 }
 
-/// DNS-1123 label usable as a StatefulSet name.
+/// DNS-1035 label usable as a StatefulSet and Service name (Services must start with a letter).
 pub fn sanitize_name(raw: &str) -> String {
     let mut s: String = raw
         .to_ascii_lowercase()
@@ -132,7 +132,13 @@ pub fn sanitize_name(raw: &str) -> String {
     let s = s.trim_matches('-');
     let s: String = s.chars().take(40).collect();
     let s = s.trim_end_matches('-').to_string();
-    if s.is_empty() { "server".into() } else { s }
+    if s.is_empty() {
+        "server".into()
+    } else if s.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("mc-{s}")
+    } else {
+        s
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -926,5 +932,7 @@ services:
     fn names() {
         assert_eq!(sanitize_name("My__Cool Server!"), "my-cool-server");
         assert_eq!(sanitize_name("---"), "server");
+        assert_eq!(sanitize_name("2b2t"), "mc-2b2t");
+        assert!(crate::crd::check_server_name(&sanitize_name(&"9".repeat(80))).is_ok());
     }
 }
