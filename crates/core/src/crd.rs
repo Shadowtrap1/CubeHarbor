@@ -568,6 +568,27 @@ pub fn effective_hostnames(name: &str, spec: &MinecraftServerSpec, base_domain: 
     }
 }
 
+/// Longest server name: the StatefulSet's `controller-revision-hash` label is `<name>-<10-char hash>`
+/// and labels are limited to 63 characters.
+pub const MAX_SERVER_NAME: usize = 52;
+
+/// Can `name` be used for the server's StatefulSet and Service? Services need a DNS-1035 label
+/// (lower-case alphanumerics and `-`, starting with a letter).
+pub fn check_server_name(name: &str) -> Result<(), String> {
+    let ok = name.starts_with(|c: char| c.is_ascii_lowercase())
+        && !name.ends_with('-')
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !ok {
+        return Err(format!(
+            "server name `{name}` is not a valid DNS-1035 label: use lower-case letters, digits and `-`, starting with a letter"
+        ));
+    }
+    if name.len() > MAX_SERVER_NAME {
+        return Err(format!("server name `{name}` is longer than {MAX_SERVER_NAME} characters"));
+    }
+    Ok(())
+}
+
 /// Lower-case, strip a trailing dot and any port.
 pub fn normalize_host(h: &str) -> String {
     let h = h.trim().trim_end_matches('.');
@@ -614,5 +635,21 @@ impl MinecraftServerSpec {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_names() {
+        assert!(check_server_name("lobby").is_ok());
+        assert!(check_server_name("atm-10").is_ok());
+        assert!(check_server_name("2b2t").is_err(), "Services must start with a letter");
+        assert!(check_server_name("Lobby").is_err());
+        assert!(check_server_name("lobby-").is_err());
+        assert!(check_server_name(&"a".repeat(MAX_SERVER_NAME)).is_ok());
+        assert!(check_server_name(&"a".repeat(MAX_SERVER_NAME + 1)).is_err());
     }
 }
