@@ -6,6 +6,12 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+* Gateway: forwarded TCP ports (voice chat, Bedrock over TCP, extras) now count against
+  `MAX_CONNECTIONS` like the Minecraft port, and TCP connections idle in both directions for
+  `gateway.idleTimeoutSeconds` (default 600, `IDLE_TIMEOUT_SECS`) are closed.
+
 ## [0.1.0]
 
 First public release.

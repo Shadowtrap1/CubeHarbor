@@ -71,6 +71,7 @@ spec:
             - { name: WATCH_NAMESPACE, value: {{ .Values.minecraft.watchNamespace | quote }} }
             - { name: ACCEPT_PROXY_PROTOCOL, value: {{ .Values.gateway.acceptProxyProtocol | quote }} }
             - { name: TRUSTED_PROXIES, value: {{ join "," .Values.gateway.trustedProxies | quote }} }
+            - { name: IDLE_TIMEOUT_SECS, value: {{ .Values.gateway.idleTimeoutSeconds | quote }} }
           ports:
             - { name: minecraft, containerPort: 25565, protocol: TCP }
             - { name: health, containerPort: 8081, protocol: TCP }

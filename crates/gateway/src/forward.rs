@@ -58,7 +58,7 @@ pub async fn run(state: Arc<State>) {
             tracing::info!("forwarding {bind}/{} -> {} ({})", proto.as_str(), target.backend, target.owner);
             let t = target.clone();
             let handle = match proto {
-                Protocol::Tcp => tokio::spawn(tcp(bind, t)),
+                Protocol::Tcp => tokio::spawn(tcp(bind, t, state.clone())),
                 Protocol::Udp => tokio::spawn(udp(bind, t, state.cfg.max_udp_sessions.max(1))),
             };
             active.insert(key, (target, handle));
@@ -66,7 +66,7 @@ pub async fn run(state: Arc<State>) {
     }
 }
 
-async fn tcp(bind: String, target: Target) {
+async fn tcp(bind: String, target: Target, state: Arc<State>) {
     let listener = match TcpListener::bind(&bind).await {
         Ok(l) => l,
         Err(e) => {
@@ -75,11 +75,20 @@ async fn tcp(bind: String, target: Target) {
             return;
         }
     };
-    while let Ok((mut client, _)) = listener.accept().await {
+    while let Ok((mut client, peer)) = listener.accept().await {
+        // Same budget as the Minecraft port, so a flood here can't exhaust sockets either.
+        let Ok(permit) = state.connections.clone().try_acquire_owned() else {
+            tracing::debug!("{peer} -> {bind}: connection limit reached, dropping");
+            continue;
+        };
         let backend = target.backend.clone();
+        let idle = state.idle_timeout();
         tokio::spawn(async move {
-            if let Ok(Ok(mut up)) = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&backend)).await {
-                let _ = tokio::io::copy_bidirectional(&mut client, &mut up).await;
+            let _permit = permit;
+            if let Ok(Ok(mut up)) = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&backend)).await
+                && let Err(e) = crate::pipe::relay(&mut client, &mut up, idle).await
+            {
+                tracing::debug!("{peer} -> {backend}: {e}");
             }
         });
     }

@@ -7,6 +7,7 @@
 mod cidr;
 mod forward;
 mod minecraft;
+mod pipe;
 
 use std::sync::Arc;
 
@@ -39,9 +40,12 @@ pub struct Config {
     /// are ignored, so players can't spoof their address. Empty = trust every peer.
     #[arg(long, env = "TRUSTED_PROXIES", default_value = "")]
     pub trusted_proxies: String,
-    /// Concurrent Minecraft connections, across all clients.
+    /// Concurrent TCP connections (Minecraft and forwarded TCP ports), across all clients.
     #[arg(long, env = "MAX_CONNECTIONS", default_value_t = 4096)]
     pub max_connections: usize,
+    /// Close TCP connections with no traffic either way for this many seconds (0 = never).
+    #[arg(long, env = "IDLE_TIMEOUT_SECS", default_value_t = 600)]
+    pub idle_timeout_secs: u64,
     /// Concurrent UDP sessions per forwarded port.
     #[arg(long, env = "MAX_UDP_SESSIONS", default_value_t = 4096)]
     pub max_udp_sessions: usize,
@@ -56,6 +60,12 @@ pub struct State {
     pub connections: Arc<tokio::sync::Semaphore>,
     /// Last wake request per server, so join spam doesn't hammer the API server.
     pub wakes: Arc<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>>,
+}
+
+impl State {
+    pub fn idle_timeout(&self) -> Option<std::time::Duration> {
+        (self.cfg.idle_timeout_secs > 0).then(|| std::time::Duration::from_secs(self.cfg.idle_timeout_secs))
+    }
 }
 
 #[tokio::main]
