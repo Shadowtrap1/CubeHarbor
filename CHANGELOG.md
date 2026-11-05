@@ -6,12 +6,6 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
-### Security
-
-* Installer: `.mrpack` file downloads are restricted to HTTPS on the hosts the Modrinth pack
-  format allows; other URLs are ignored, and a file with none left fails the install
-  (`CUBEHARBOR_MRPACK_ANY_HOST=true` to opt out). Installer boolean env vars now accept
-  `1`/`yes`/`y`/`on` as well as `true`.
 ### Fixed
 
 * Operator: the `cubeharbor-gateway-ports` Service is no longer deleted when the last allocated
@@ -43,6 +37,13 @@ All notable changes are listed here. The format follows
   installer, and parallel downloads to `a.jar` and `a.zip` no longer share a temp file.
 * Operator: status fields that become empty are now cleared, so a fixed error's message and a
   stopped server's player list no longer stick around.
+
+### Security
+
+* Installer: `.mrpack` file downloads are restricted to HTTPS on the hosts the Modrinth pack
+  format allows; other URLs are ignored, and a file with none left fails the install
+  (`CUBEHARBOR_MRPACK_ANY_HOST=true` to opt out). Installer boolean env vars now accept
+  `1`/`yes`/`y`/`on` as well as `true`.
 
 ## [0.1.0]
 
