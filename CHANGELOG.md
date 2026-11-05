@@ -6,6 +6,11 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+* Operator: status fields that become empty are now cleared, so a fixed error's message and a
+  stopped server's player list no longer stick around.
+
 ## [0.1.0]
 
 First public release.
