@@ -6,11 +6,6 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
-### Security
-
-* Gateway: no longer allowed to patch MinecraftServers. Wake-ups go through a `<release>-wake`
-  ConfigMap, the only object the gateway can write, and the operator applies them. A
-  compromised gateway can no longer change any server's spec.
 ### Fixed
 
 * Compose: `curseforge:`/`cf:` entries in `mods:` are rejected with a clear error instead of
@@ -51,6 +46,9 @@ All notable changes are listed here. The format follows
 
 ### Security
 
+* Gateway: no longer allowed to patch MinecraftServers. Wake-ups go through a `<release>-wake`
+  ConfigMap, the only object the gateway can write, and the operator applies them. A
+  compromised gateway can no longer change any server's spec.
 * Dashboard: refuses to start with an empty `DASHBOARD_PASSWORD`. Failed logins are now
   rate-limited per client (10/min) with a global backstop (100/min), so one client can no
   longer lock everyone out. New `dashboard.trustedProxies` / `TRUSTED_PROXIES`, and the global
