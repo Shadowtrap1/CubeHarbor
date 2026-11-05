@@ -8,6 +8,9 @@ All notable changes are listed here. The format follows
 
 ### Fixed
 
+* Operator: the `cubeharbor-gateway-ports` Service is no longer deleted when the last allocated
+  port goes away. It keeps a placeholder port instead, so a cloud load balancer keeps its
+  external IP and voice chat / Bedrock addresses keep working when ports come back.
 * Installer: removing the modpack from a server now deletes the pack's mods instead of leaving
   them untracked in `mods/`.
 * Installer: players removed from `ops` or `whitelist` in the spec are now removed from
