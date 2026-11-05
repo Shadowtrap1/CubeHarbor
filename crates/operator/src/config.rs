@@ -48,7 +48,7 @@ pub struct Config {
     pub gateway_external_traffic_policy: String,
 
     /// Default EULA acceptance for servers that don't set `acceptEula`.
-    #[arg(long, env = "ACCEPT_EULA", default_value_t = false)]
+    #[arg(long, env = "ACCEPT_EULA", default_value_t = false, value_parser = clap::builder::BoolishValueParser::new())]
     pub accept_eula: bool,
 
     #[arg(long, env = "CURSEFORGE_API_KEY", hide_env_values = true)]
@@ -76,7 +76,7 @@ pub struct Config {
 
     /// Allow `spec.image` to replace the cubeharbor server image. Off by default: whoever can
     /// edit a MinecraftServer could otherwise run any container image in its namespace.
-    #[arg(long, env = "ALLOW_IMAGE_OVERRIDE", default_value_t = false, action = clap::ArgAction::Set)]
+    #[arg(long, env = "ALLOW_IMAGE_OVERRIDE", default_value_t = false, action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
     pub allow_image_override: bool,
     /// Image prefixes accepted for `spec.image` when overrides are allowed (comma separated;
     /// empty = any image).
@@ -92,7 +92,7 @@ pub struct Config {
     pub reserved_hosts: String,
 
     /// Create a NetworkPolicy per server that only lets the dashboard reach RCON.
-    #[arg(long, env = "RCON_NETWORK_POLICY", default_value_t = true, action = clap::ArgAction::Set)]
+    #[arg(long, env = "RCON_NETWORK_POLICY", default_value_t = true, action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
     pub rcon_network_policy: bool,
     /// Namespace and pod labels (`k=v,k=v`) of the dashboard, the only RCON client.
     #[arg(long, env = "DASHBOARD_NAMESPACE", default_value = defaults::NAMESPACE)]

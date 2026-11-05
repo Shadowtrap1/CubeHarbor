@@ -33,7 +33,7 @@ pub struct Config {
     #[arg(long, env = "PORTS_BIND", default_value = "0.0.0.0")]
     pub ports_bind: String,
     /// Expect a PROXY protocol header from the load balancer in front of the gateway.
-    #[arg(long, env = "ACCEPT_PROXY_PROTOCOL", default_value_t = false)]
+    #[arg(long, env = "ACCEPT_PROXY_PROTOCOL", default_value_t = false, value_parser = clap::builder::BoolishValueParser::new())]
     pub accept_proxy_protocol: bool,
     /// Peers (comma separated CIDRs) whose PROXY headers are believed. Headers from anyone else
     /// are ignored, so players can't spoof their address. Empty = trust every peer.

@@ -51,7 +51,7 @@ pub struct Config {
     #[arg(long, env = "CORS_ORIGINS", default_value = "")]
     pub cors_origins: String,
     /// Serve `GET /api/v1/servers` without a login (read-only list for public status pages).
-    #[arg(long, env = "PUBLIC_SERVER_LIST", default_value_t = false)]
+    #[arg(long, env = "PUBLIC_SERVER_LIST", default_value_t = false, value_parser = clap::builder::BoolishValueParser::new())]
     pub public_server_list: bool,
     /// Unused since sessions became random server-side tokens; kept so existing deployments start.
     #[arg(long, env = "SESSION_SECRET", default_value = "", hide_env_values = true)]
@@ -62,7 +62,7 @@ pub struct Config {
     pub allowed_namespaces: String,
     /// Mark the session cookie `Secure` (set when the dashboard is served over HTTPS). Also set
     /// automatically for requests arriving with `X-Forwarded-Proto: https`.
-    #[arg(long, env = "COOKIE_SECURE", default_value_t = false, action = clap::ArgAction::Set)]
+    #[arg(long, env = "COOKIE_SECURE", default_value_t = false, action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
     pub cookie_secure: bool,
     /// YAML file with branding, theme and form defaults (see `examples/site.yaml`).
     #[arg(long, env = "SITE_CONFIG")]
