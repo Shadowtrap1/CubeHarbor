@@ -292,8 +292,12 @@ pub fn statefulset(mcs: &MinecraftServer, inp: PodInputs<'_>) -> Result<Stateful
     let startup_period = 10;
     let startup_failures = defaults::STARTUP_PROBE_MINUTES * 60 / startup_period;
     startup.as_object_mut().unwrap().extend([("periodSeconds".into(), json!(startup_period)), ("failureThreshold".into(), json!(startup_failures))]);
-    let mut readiness = tcp.clone();
-    readiness.as_object_mut().unwrap().extend([("periodSeconds".into(), json!(10)), ("failureThreshold".into(), json!(3))]);
+    // Ready = answers a status ping. Vanilla binds the port before the world is loaded, so a TCP
+    // check would mark it Running (and the gateway would forward players) while it's still starting.
+    let readiness = json!({
+        "exec": { "command": ["cubeharbor-runner", "probe"] },
+        "periodSeconds": 10, "timeoutSeconds": 8, "failureThreshold": 3,
+    });
     let mut liveness = tcp;
     liveness.as_object_mut().unwrap().extend([("periodSeconds".into(), json!(30)), ("failureThreshold".into(), json!(10)), ("timeoutSeconds".into(), json!(10))]);
 

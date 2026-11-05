@@ -38,6 +38,18 @@ const AIKAR_SMALL: &[&str] = &["-XX:G1NewSizePercent=30", "-XX:G1MaxNewSizePerce
 
 #[tokio::main]
 async fn main() {
+    // `cubeharbor-runner probe`: the readiness probe. Vanilla opens its port before the world is
+    // loaded, so an open port doesn't mean players can join; a status ping does.
+    if std::env::args().nth(1).as_deref() == Some("probe") {
+        let addr = format!("127.0.0.1:{}", cubeharbor_core::crd::MINECRAFT_PORT);
+        match cubeharbor_core::protocol::ping(&addr, "localhost", cubeharbor_core::crd::MINECRAFT_PORT).await {
+            Ok(_) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("not ready: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
     tracing_subscriber::fmt().with_target(false).init();
     match run().await {
         Ok(code) => std::process::exit(code),
