@@ -145,7 +145,7 @@ fn service_ports(mcs: &MinecraftServer) -> Vec<Value> {
     ];
     // Names are checked by `MinecraftServerSpec::check_ports` before anything is applied.
     let mut add = |name: &str, port: u16, proto: &str| {
-        ports.push(json!({ "name": name, "port": port, "targetPort": port, "protocol": proto }));
+        ports.push(json!({ "name": cubeharbor_core::crd::k8s_port_name(name), "port": port, "targetPort": port, "protocol": proto }));
     };
     if let Some(v) = &mcs.spec.voice {
         add("voice", v.kind.container_port(), "UDP");

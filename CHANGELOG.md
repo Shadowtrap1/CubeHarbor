@@ -6,6 +6,12 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+* Operator: port names and container ports are checked before anything is applied, so colliding
+  or invalid ports (e.g. two long names cut to the same 15 characters, or an extra port reusing
+  the voice chat port) give a clear status message instead of repeated API errors.
+
 ## [0.1.0]
 
 First public release.

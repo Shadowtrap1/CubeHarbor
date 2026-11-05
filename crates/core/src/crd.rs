@@ -568,6 +568,12 @@ pub fn effective_hostnames(name: &str, spec: &MinecraftServerSpec, base_domain: 
     }
 }
 
+/// The name an extra port gets in the pod and Service. Kubernetes allows 15 characters, and
+/// longer names have always been cut rather than rejected, so existing servers keep working.
+pub fn k8s_port_name(name: &str) -> &str {
+    name.get(..15).unwrap_or(name)
+}
+
 /// A Kubernetes port name (IANA service name): at most 15 lower-case alphanumerics or `-`,
 /// with at least one letter, no leading/trailing `-` and no `--`.
 fn check_port_name(name: &str) -> Result<(), String> {
@@ -633,9 +639,10 @@ impl MinecraftServerSpec {
         out
     }
 
-    /// Check the ports every server pod and Service gets: port names must be valid Kubernetes
-    /// port names (at most 15 characters) and unique, and no two may share a container port and
-    /// protocol. The API server would otherwise reject the Service and StatefulSet.
+    /// Check the ports every server pod and Service gets: port names (after the cut to 15
+    /// characters, see [`k8s_port_name`]) must be valid Kubernetes port names and unique, and no
+    /// two may share a container port and protocol. The API server would otherwise reject the
+    /// Service and StatefulSet.
     pub fn check_ports(&self) -> Result<(), String> {
         let mut ports: Vec<(&str, u16, Protocol)> = vec![("minecraft", MINECRAFT_PORT, Protocol::Tcp), ("rcon", RCON_PORT, Protocol::Tcp)];
         if let Some(v) = &self.voice {
@@ -645,13 +652,16 @@ impl MinecraftServerSpec {
             ports.push(("bedrock", GEYSER_PORT, Protocol::Udp));
         }
         for p in &self.extra_ports {
-            check_port_name(&p.name)?;
-            ports.push((&p.name, p.container_port, p.protocol));
+            let name = k8s_port_name(&p.name);
+            check_port_name(name).map_err(|e| if name == p.name { e } else { format!("{e} (`{}` is cut to 15 characters)", p.name) })?;
+            ports.push((name, p.container_port, p.protocol));
         }
         let (mut names, mut numbers) = (std::collections::HashSet::new(), std::collections::HashSet::new());
         for (name, port, proto) in ports {
             if !names.insert(name) {
-                return Err(format!("port name `{name}` is used twice (minecraft, rcon, voice and bedrock are reserved)"));
+                return Err(format!(
+                    "port name `{name}` is used twice (names are cut to 15 characters; minecraft, rcon, voice and bedrock are reserved)"
+                ));
             }
             if !numbers.insert((port, proto)) {
                 return Err(format!("container port {port}/{} is used twice (port `{name}`)", proto.as_str()));
@@ -677,8 +687,13 @@ mod tests {
         };
         let with = |ports: Vec<ExtraPort>| MinecraftServerSpec { extra_ports: ports, ..Default::default() };
         assert!(with(vec![port("bluemap", 8100), port("dynmap", 8123)]).check_ports().is_ok());
-        // Used to be cut to `bluemap-web-htt`, colliding with `bluemap-web-https`.
-        assert!(with(vec![port("bluemap-web-http", 8100)]).check_ports().is_err());
+        // Long names are cut to 15 characters, as before: one alone is fine...
+        assert!(with(vec![port("bluemap-web-http", 8100)]).check_ports().is_ok());
+        // ...but two that are cut to the same `bluemap-web-htt` collide.
+        assert!(with(vec![port("bluemap-web-http", 8100), port("bluemap-web-https", 8101)]).check_ports().is_err());
+        // The cut can leave an invalid name.
+        assert!(with(vec![port("bluemap-webmap-", 8100)]).check_ports().is_err());
+        assert!(with(vec![port("bluemap-webmap-x", 8100)]).check_ports().is_err());
         assert!(with(vec![port("BlueMap", 8100)]).check_ports().is_err());
         assert!(with(vec![port("8100", 8100)]).check_ports().is_err());
         assert!(with(vec![port("map", 8100), port("map", 8101)]).check_ports().is_err());
