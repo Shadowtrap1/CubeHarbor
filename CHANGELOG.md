@@ -8,8 +8,8 @@ All notable changes are listed here. The format follows
 
 ### Security
 
-* Gateway: forwarded TCP ports (voice chat, Bedrock over TCP, extras) now count against
-  `MAX_CONNECTIONS` like the Minecraft port, and TCP connections idle in both directions for
+* Gateway: forwarded TCP ports (voice chat, Bedrock over TCP, extras) now have a connection
+  limit (`gateway.maxForwardConnections`, default 1024, separate from the Minecraft port's), and TCP connections idle in both directions for
   `gateway.idleTimeoutSeconds` (default 600, `IDLE_TIMEOUT_SECS`) are closed.
 
 ## [0.1.0]

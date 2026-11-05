@@ -379,10 +379,12 @@ every namespace the dashboard manages.
   capped at 8 GiB and archive extraction at 32 GiB (`CUBEHARBOR_MAX_DOWNLOAD_MIB`,
   `CUBEHARBOR_MAX_EXTRACT_MIB`).
 * **Gateway.** With `gateway.acceptProxyProtocol`, list your load balancers in
-  `gateway.trustedProxies`; otherwise any client can claim any source IP. TCP connections
-  (Minecraft and forwarded ports together) and UDP sessions per port are capped
-  (`MAX_CONNECTIONS`, `MAX_UDP_SESSIONS`, default 4096), and TCP connections with no traffic for
-  `gateway.idleTimeoutSeconds` (default 600) are closed.
+  `gateway.trustedProxies`; otherwise any client can claim any source IP. Connections are capped
+  separately for the Minecraft port (`gateway.maxConnections`, default 4096) and for all forwarded
+  TCP ports together (`gateway.maxForwardConnections`, default 1024), so a flood on e.g. a web map
+  port can't block logins; UDP sessions are capped per port (`MAX_UDP_SESSIONS`, default 4096).
+  TCP connections with no traffic for `gateway.idleTimeoutSeconds` (default 600) are closed,
+  which also cuts quiet WebSocket UIs on forwarded ports; raise it or set 0 if that matters.
 * Operator, gateway and dashboard run as non-root with a read-only root filesystem on distroless images.
 
 ## Contributing

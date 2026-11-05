@@ -81,20 +81,39 @@ mod tests {
         relay.await.unwrap().unwrap();
     }
 
+    /// A client that sends its request and half-closes still gets the backend's later reply.
+    #[tokio::test]
+    async fn half_close_is_passed_on() {
+        let (mut client, mut gw_in) = pair().await;
+        let (mut gw_out, mut backend) = pair().await;
+        let relay = tokio::spawn(async move { relay(&mut gw_in, &mut gw_out, Some(Duration::from_secs(5))).await });
+        client.write_all(b"req").await.unwrap();
+        client.shutdown().await.unwrap();
+        let mut got = vec![];
+        backend.read_to_end(&mut got).await.unwrap();
+        assert_eq!(got, b"req");
+        backend.write_all(b"late reply").await.unwrap();
+        drop(backend);
+        let mut reply = vec![];
+        client.read_to_end(&mut reply).await.unwrap();
+        assert_eq!(reply, b"late reply");
+        relay.await.unwrap().unwrap();
+    }
+
     #[tokio::test]
     async fn idle_connections_are_dropped() {
         let ms = Duration::from_millis;
         let (mut client, mut gw_in) = pair().await;
         let (mut gw_out, mut backend) = pair().await;
-        let relay = tokio::spawn(async move { relay(&mut gw_in, &mut gw_out, Some(ms(400))).await });
+        let relay = tokio::spawn(async move { relay(&mut gw_in, &mut gw_out, Some(ms(1000))).await });
         // Traffic keeps it alive past the first deadline...
-        tokio::time::sleep(ms(250)).await;
+        tokio::time::sleep(ms(600)).await;
         client.write_all(b"x").await.unwrap();
         backend.read_exact(&mut [0u8; 1]).await.unwrap();
-        tokio::time::sleep(ms(250)).await;
+        tokio::time::sleep(ms(600)).await;
         assert!(!relay.is_finished(), "dropped despite recent traffic");
         // ...and silence ends it.
-        let err = tokio::time::timeout(ms(2000), relay).await.expect("idle connection kept open").unwrap().unwrap_err();
+        let err = tokio::time::timeout(ms(5000), relay).await.expect("idle connection kept open").unwrap().unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
     }
 }

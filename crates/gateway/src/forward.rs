@@ -76,8 +76,8 @@ async fn tcp(bind: String, target: Target, state: Arc<State>) {
         }
     };
     while let Ok((mut client, peer)) = listener.accept().await {
-        // Same budget as the Minecraft port, so a flood here can't exhaust sockets either.
-        let Ok(permit) = state.connections.clone().try_acquire_owned() else {
+        // Its own budget: a flood here can't exhaust sockets, nor take slots from the Minecraft port.
+        let Ok(permit) = state.forward_connections.clone().try_acquire_owned() else {
             tracing::debug!("{peer} -> {bind}: connection limit reached, dropping");
             continue;
         };
