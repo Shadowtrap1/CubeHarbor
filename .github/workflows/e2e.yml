@@ -1,0 +1,110 @@
+name: e2e
+# Installs the chart into a throwaway kind cluster, starts a real vanilla server and checks that
+# players reach it through the gateway. Slow (images + a Minecraft boot), so it runs separately
+# from the unit tests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      REGISTRY: e2e.local
+      TAG: dev
+      NS: cubeharbor
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build images
+        run: |
+          docker buildx bake --load operator gateway dashboard server-java21
+          docker buildx build --load --target cubeharbor -t "$REGISTRY/cubeharbor:$TAG" .
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: e2e
+      - uses: azure/setup-helm@v5
+
+      - name: Load images into kind
+        run: |
+          for i in operator gateway dashboard; do kind load docker-image --name e2e "$REGISTRY/cubeharbor-$i:$TAG"; done
+          kind load docker-image --name e2e "$REGISTRY/cubeharbor-server:$TAG-java21"
+
+      - name: Install the chart
+        run: |
+          helm install cubeharbor charts/cubeharbor -n "$NS" --create-namespace --wait --timeout 5m \
+            --set image.registry="$REGISTRY" --set image.tag="$TAG" --set image.pullPolicy=Never \
+            --set minecraft.acceptEula=true --set minecraft.baseDomain=mc.test \
+            --set minecraft.defaultCpuRequest=0 --set gateway.service.type=ClusterIP
+
+      - name: CRD validation rules are accepted and enforced
+        run: |
+          # Installing the chart already proved the API server accepts the CRD's CEL rules
+          # (including their cost estimate). Check that the name rule rejects what it should.
+          if grep -q 'x-kubernetes-validations' charts/cubeharbor/crds/minecraftservers.yaml; then
+            if kubectl -n "$NS" apply --dry-run=server -f - <<EOF 2>/tmp/cel.log; then
+          apiVersion: cubeharbor.dev/v1alpha1
+          kind: MinecraftServer
+          metadata: { name: 2b2t, namespace: $NS }
+          spec: { version: "1.21.1" }
+          EOF
+              echo "a server named 2b2t was accepted"; exit 1
+            fi
+            cat /tmp/cel.log; grep -q "DNS-1035" /tmp/cel.log
+          else
+            echo "no CEL rules in this CRD, skipping"
+          fi
+
+      - name: Create a vanilla server
+        run: |
+          kubectl apply -f - <<EOF
+          apiVersion: cubeharbor.dev/v1alpha1
+          kind: MinecraftServer
+          metadata: { name: smoke, namespace: $NS }
+          spec:
+            version: "1.21.1"
+            loader: vanilla
+            resources: { memory: 2Gi, storage: 2Gi }
+            properties: { view-distance: "4", simulation-distance: "4", spawn-protection: "0" }
+          EOF
+          kubectl -n "$NS" wait mcs/smoke --for=jsonpath='{.status.phase}'=Running --timeout=15m
+
+      - name: Ping through the gateway
+        run: |
+          kubectl -n "$NS" port-forward deploy/cubeharbor-gateway 25565:25565 > /tmp/pf.log 2>&1 &
+          for _ in $(seq 30); do nc -z 127.0.0.1 25565 && break; sleep 1; done
+          ping() { docker run --rm --network host "$REGISTRY/cubeharbor:$TAG" ping 127.0.0.1:25565 --host "$1"; }
+          # Routed by hostname to the real server, which reports its own version...
+          out=$(ping smoke.mc.test); echo "$out"; grep -q "1.21.1" <<<"$out"
+          # ...while unknown hosts are answered by the gateway itself.
+          out=$(ping nobody.mc.test); echo "$out"; grep -q "cubeharbor" <<<"$out"
+
+      - name: Pause and resume
+        run: |
+          kubectl -n "$NS" patch mcs/smoke --type merge -p '{"spec":{"paused":true}}'
+          kubectl -n "$NS" wait mcs/smoke --for=jsonpath='{.status.phase}'=Stopped --timeout=3m
+          kubectl -n "$NS" wait sts/smoke --for=jsonpath='{.spec.replicas}'=0 --timeout=3m
+          kubectl -n "$NS" wait pod/smoke-0 --for=delete --timeout=4m
+          kubectl -n "$NS" patch mcs/smoke --type merge -p '{"spec":{"paused":false}}'
+          kubectl -n "$NS" wait mcs/smoke --for=jsonpath='{.status.phase}'=Running --timeout=10m
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl get all,mcs,pvc -A -o wide || true
+          kubectl -n "$NS" get mcs -o yaml || true
+          kubectl -n "$NS" describe pods || true
+          for d in operator gateway dashboard; do echo "--- $d"; kubectl -n "$NS" logs deploy/cubeharbor-$d --tail=200 || true; done
+          for c in install server; do echo "--- smoke/$c"; kubectl -n "$NS" logs smoke-0 -c $c --tail=200 || true; done
+          cat /tmp/pf.log || true
