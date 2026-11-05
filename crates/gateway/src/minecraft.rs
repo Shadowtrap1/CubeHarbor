@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use cubeharbor_core::crd::{MINECRAFT_PORT, MinecraftServer, Phase};
+use cubeharbor_core::crd::{MINECRAFT_PORT, MinecraftServer, Phase, claim_order};
 use cubeharbor_core::labels::WAKE_ANNOTATION;
 use cubeharbor_core::protocol::{self, Handshake};
 use kube::api::{Api, Patch, PatchParams};
@@ -34,10 +34,12 @@ pub async fn listen(state: Arc<State>) -> Result<()> {
     }
 }
 
-/// Find the server for a hostname: exact match first, then the default server.
+/// Find the server for a hostname: exact match first, then the default server. When several
+/// claim it, the oldest wins (the operator reports the others), never whichever the cache lists first.
 pub fn route(servers: &[Arc<MinecraftServer>], host: &str) -> Option<Arc<MinecraftServer>> {
-    let exact = servers.iter().find(|s| s.status.as_ref().is_some_and(|st| st.hostnames.iter().any(|h| h == host)));
-    exact.or_else(|| servers.iter().find(|s| s.spec.routing.default)).cloned()
+    let oldest = |it: &mut dyn Iterator<Item = &Arc<MinecraftServer>>| it.min_by_key(|s| claim_order(s)).cloned();
+    oldest(&mut servers.iter().filter(|s| s.status.as_ref().is_some_and(|st| st.hostnames.iter().any(|h| h == host))))
+        .or_else(|| oldest(&mut servers.iter().filter(|s| s.spec.routing.default)))
 }
 
 async fn handle(state: Arc<State>, mut client: TcpStream, mut peer: SocketAddr) -> Result<()> {
@@ -82,7 +84,7 @@ async fn handle(state: Arc<State>, mut client: TcpStream, mut peer: SocketAddr) 
         upstream.write_all(&protocol::proxy_v2_header(peer, local)).await?;
     }
     upstream.write_all(&buf).await?;
-    tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
+    crate::pipe::relay(&mut client, &mut upstream, state.idle_timeout()).await?;
     Ok(())
 }
 
