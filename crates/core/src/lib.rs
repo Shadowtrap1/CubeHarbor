@@ -1,5 +1,6 @@
 //! Shared types and clients for the cubeharbor Minecraft platform.
 
+pub mod cidr;
 pub mod compose;
 pub mod crd;
 pub mod defaults;

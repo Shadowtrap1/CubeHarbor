@@ -121,7 +121,13 @@ async fn quilt(ctx: &Ctx, mc: &str, loader: Option<&str>) -> Result<LaunchSpec> 
         }
     };
     let installers: Vec<QuiltVersion> = ctx.http.get_json(&format!("{META}/versions/installer")).await?;
-    let inst = installers.first().and_then(|i| i.url.clone()).context("no Quilt installer")?;
+    // Like the loader: skip pre-releases (`-beta.1`), which Quilt's meta lists first.
+    let inst = installers
+        .iter()
+        .find(|i| !i.version.contains('-'))
+        .or(installers.first())
+        .and_then(|i| i.url.clone())
+        .context("no Quilt installer")?;
     let jar = fetch_temp(ctx, &inst, "quilt-installer.jar", None).await?;
     let dir = ctx.root.to_string_lossy().to_string();
     java(

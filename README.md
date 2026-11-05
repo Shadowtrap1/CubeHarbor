@@ -96,6 +96,11 @@ kubectl -n cubeharbor port-forward svc/cubeharbor-dashboard 8080:80
 kubectl -n cubeharbor get secret cubeharbor-dashboard -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
+To choose the dashboard password yourself, add `--set-string dashboard.password='<at least 12
+characters>'` to the install (or `helm upgrade --reuse-values` later), or keep it in your own Secret
+with a `password` key and set `dashboard.existingSecret`. Without either, a random 24-character
+password is generated once and kept across upgrades.
+
 Before you expose the dashboard, read [Security notes](#security-notes) and give it an Ingress
 with TLS (`dashboard.ingress`). [`examples/values-k3s.yaml`](examples/values-k3s.yaml) is a
 complete values file for a home-lab cluster. Every option is documented in
@@ -277,7 +282,12 @@ curl -H "Authorization: Bearer $PW" --data-binary @network.yaml 'https://cubehar
 * **Voice chat, Bedrock and extra ports** get a public port from `minecraft.portRange`, or a
   pinned `publicPort`. The operator maintains a `cubeharbor-gateway-ports` Service (LoadBalancer
   by default) with every allocation, and the gateway binds the matching TCP/UDP forwarders.
-  Allocations are stored in each server's status and stay stable across restarts.
+  Allocations are stored in each server's status and stay stable across restarts. Once created,
+  the Service is kept even when no ports are allocated (with a placeholder port), so its load
+  balancer address doesn't change; delete it by hand to release the load balancer. The placeholder
+  is TCP on the first port of `minecraft.portRange` (with `NodePort` it holds that node port), and
+  some cloud load balancers report its target unhealthy because nothing listens there; that's
+  expected while no ports are allocated.
 * **Simple Voice Chat** is installed from Modrinth (Fabric, Forge, NeoForge, Quilt, or the
   Paper plugin) and its `voice_host` is set to `<publicHost>:<allocated port>`, so clients
   connect without manual configuration. Plasmo Voice gets a port too; set its `host.port` to 60606.
@@ -357,8 +367,13 @@ every namespace the dashboard manages.
 
 * **Dashboard login.** One password, generated on install and stored in a Secret; also accepted
   as a `Bearer` token for `/api/*`. Logins get a random session token that lasts 7 days and is
-  revoked on logout (and on a dashboard restart). After 10 failed password checks in a minute,
-  all password checks get `429` until the minute is over. Serve the dashboard over TLS: the cookie
+  revoked on logout (and on a dashboard restart). The dashboard refuses to start with an empty
+  password. A client with 10 failed password checks in a minute gets `429` until the minute is
+  over, and so does everyone once 100 failures a minute come in overall
+  (`dashboard.loginMaxFailuresTotal`; 0 turns the overall limit off, so nobody can block other
+  people's logins). Behind an Ingress, list the ingress controller's pod CIDR in
+  `dashboard.trustedProxies` so clients are told apart by `X-Forwarded-For`; otherwise they share
+  one limit. Serve the dashboard over TLS: the cookie
   is marked `Secure` automatically when the Ingress has `tls`, or set `dashboard.cookieSecure`.
 * **Namespaces.** The dashboard only manages its default namespace plus
   `dashboard.allowedNamespaces`, and its RBAC (including `get` on Secrets for RCON) is granted
@@ -377,12 +392,22 @@ every namespace the dashboard manages.
 * **Downloads.** Files without a published checksum must come over HTTPS
   (`CUBEHARBOR_ALLOW_INSECURE_HTTP=true` in a server's `env` overrides this). Single downloads are
   capped at 8 GiB and archive extraction at 32 GiB (`CUBEHARBOR_MAX_DOWNLOAD_MIB`,
-  `CUBEHARBOR_MAX_EXTRACT_MIB`).
+  `CUBEHARBOR_MAX_EXTRACT_MIB`). Files listed in a `.mrpack` are only downloaded over HTTPS from
+  the hosts the pack format allows (`cdn.modrinth.com`, `github.com`, `raw.githubusercontent.com`,
+  `gitlab.com`), so a crafted pack can't make the installer call cluster-internal addresses
+  (`CUBEHARBOR_MRPACK_ANY_HOST=true` in the server's `env` lifts this). This protects against pack
+  *contents*, not against whoever edits the MinecraftServer: `modpack.url` and `mods[].url` are
+  still fetched as given (HTTPS unless checksummed), so only let trusted users edit servers.
 * **Gateway.** The gateway is the internet-facing component, so it can only *read*
   MinecraftServers. To wake a sleeping server it writes one ConfigMap (`<release>-wake`, the only
-  object its RBAC lets it change), and the operator does the actual wake-up. With `gateway.acceptProxyProtocol`, list your load balancers in
-  `gateway.trustedProxies`; otherwise any client can claim any source IP. Connections and UDP
-  sessions per port are capped (`MAX_CONNECTIONS`, `MAX_UDP_SESSIONS`, default 4096).
+  object its RBAC lets it change), and the operator does the actual wake-up; a compromised gateway
+  can at most wake sleeping servers. With `gateway.acceptProxyProtocol`, list your load balancers in
+  `gateway.trustedProxies`; otherwise any client can claim any source IP. Connections are capped
+  separately for the Minecraft port (`gateway.maxConnections`, default 4096) and for all forwarded
+  TCP ports together (`gateway.maxForwardConnections`, default 1024), so a flood on e.g. a web map
+  port can't block logins; UDP sessions are capped per port (`MAX_UDP_SESSIONS`, default 4096).
+  TCP connections with no traffic for `gateway.idleTimeoutSeconds` (default 600) are closed,
+  which also cuts quiet WebSocket UIs on forwarded ports; raise it or set 0 if that matters.
 * Operator, gateway and dashboard run as non-root with a read-only root filesystem on distroless images.
 
 ## Contributing

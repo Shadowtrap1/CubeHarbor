@@ -1,4 +1,4 @@
-//! Minimal CIDR matching for the PROXY protocol trust list.
+//! Minimal CIDR matching for trusted-proxy lists (gateway PROXY protocol, dashboard X-Forwarded-For).
 
 use std::net::IpAddr;
 
