@@ -6,6 +6,12 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+* Server names that start with a digit (e.g. `2b2t`) are prefixed with `mc-` on compose import
+  and quick create, and the operator reports invalid or too long names (Services need a
+  DNS-1035 label of at most 52 characters here) instead of failing halfway through a reconcile.
+
 ## [0.1.0]
 
 First public release.
