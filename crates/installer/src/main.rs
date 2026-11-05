@@ -121,9 +121,10 @@ async fn install_base(ctx: &Ctx, plan: &InstallPlan, state: &InstallState) -> Re
         }
         server_pack = result.server_pack;
         pack_files = result.files;
-        let keep: HashSet<&str> = pack_files.iter().map(String::as_str).collect();
-        remove_stale(&ctx.root, &state.pack_files, &keep.into_iter().collect::<Vec<_>>()).await;
     }
+    // Also when the modpack was removed from the spec: its jars must not stay in mods/ untracked.
+    let keep: HashSet<&str> = pack_files.iter().map(String::as_str).collect();
+    remove_stale(&ctx.root, &state.pack_files, &keep.into_iter().collect::<Vec<_>>()).await;
 
     let launch = match loaders::install(ctx, &mc, loader, loader_version.as_deref()).await {
         Ok(l) => l,
@@ -159,4 +160,28 @@ async fn remove_stale(root: &Path, previous: &[String], keep: &[&str]) {
 async fn save(path: &Path, state: &InstallState) -> Result<()> {
     tokio::fs::write(path, serde_json::to_vec_pretty(state)?).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dropping a modpack (nothing kept) removes its jars but leaves configs and worlds alone.
+    #[tokio::test]
+    async fn stale_pack_files_are_removed() {
+        let root = std::env::temp_dir().join(format!("cubeharbor-stale-{}", std::process::id()));
+        for f in ["mods/create.jar", "mods/jei.jar", "config/create.toml", "world/level.dat"] {
+            tokio::fs::create_dir_all(root.join(f).parent().unwrap()).await.unwrap();
+            tokio::fs::write(root.join(f), "x").await.unwrap();
+        }
+        let previous: Vec<String> = ["mods/create.jar", "mods/jei.jar", "config/create.toml"].map(String::from).to_vec();
+        remove_stale(&root, &previous, &["mods/jei.jar"]).await;
+        assert!(!root.join("mods/create.jar").exists());
+        assert!(root.join("mods/jei.jar").exists(), "kept by the new pack");
+        assert!(root.join("config/create.toml").exists(), "configs are left alone");
+        remove_stale(&root, &previous, &[]).await;
+        assert!(!root.join("mods/jei.jar").exists(), "pack removed entirely");
+        assert!(root.join("world/level.dat").exists());
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
 }

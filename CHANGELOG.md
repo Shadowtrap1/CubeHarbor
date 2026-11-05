@@ -8,6 +8,8 @@ All notable changes are listed here. The format follows
 
 ### Fixed
 
+* Installer: removing the modpack from a server now deletes the pack's mods instead of leaving
+  them untracked in `mods/`.
 * Installer: players removed from `ops` or `whitelist` in the spec are now removed from
   `ops.json` / `whitelist.json` (players added in-game are left alone), and emptying the
   whitelist turns `white-list` off again. Only players removed after this version are cleaned up.
