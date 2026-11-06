@@ -283,7 +283,7 @@ pub async fn server_action(st: St, Path((ns, name, action)): Path<(String, Strin
                 let pvcs: Api<PersistentVolumeClaim> = Api::namespaced(st.client.clone(), &ns);
                 let pvc = format!("data-{name}-0");
                 ignore_not_found(pvcs.delete(&pvc, &DeleteParams::default()).await).map_err(|e| {
-                    anyhow::anyhow!("server {ns}/{name} was deleted, but its world volume {pvc} was not: {e}")
+                    anyhow::anyhow!("server {ns}/{name} was deleted, but its world volume {pvc} was not: {e}. Delete it with: kubectl -n {ns} delete pvc {pvc}")
                 })?;
             }
             return Ok(Redirect::to("/").into_response());
@@ -522,6 +522,11 @@ mod account_tests {
         // Length counts characters, not bytes.
         assert!(check_new_password("old", "ééééééééééé", "ééééééééééé").is_err());
     }
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
 
     #[test]
     fn pvc_delete_ignores_only_not_found() {

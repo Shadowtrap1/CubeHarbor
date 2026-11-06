@@ -32,8 +32,7 @@ All notable changes are listed here. The format follows
 
 * Dashboard: **Delete with data** now reports an error when the world volume
   (`data-<name>-0`) can't be deleted, instead of redirecting as if it was. A volume that's
-  already gone is still fine.
-
+  already gone is still fine, and the message includes the `kubectl` command to delete it.
 * Servers only count as ready (`Running`) once they answer a status ping. Vanilla opens its port
   before the world is loaded, so a server used to show `Running`, and the gateway forwarded
   players to it, while it was still preparing the spawn area.
