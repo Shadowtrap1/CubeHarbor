@@ -218,7 +218,8 @@ helm upgrade cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor -n cubeharbo
   left alone and a warning is logged, since players could be sent to them.
 * **Cloudflare Tunnel / CNAMEs.** A name that has a CNAME record (such as a Cloudflare Tunnel
   hostname for the dashboard) is never changed: it's skipped with a warning, even if you list it
-  in `records`. The dashboard's own host (`dashboard.ingress.host`) is never managed either.
+  in `records`. The dashboard's own hosts (`dashboard.ingress.host`, and `cloudflareTunnel.hostname`
+  when the [tunnel](#remote-access-with-cloudflare-tunnel) is on) are never managed either.
   Don't list the tunnel hostname in `records` anyway, so the intent is clear. The default
   wildcard `*.<baseDomain>` doesn't affect it: an existing record for a name takes precedence
   over the wildcard.
