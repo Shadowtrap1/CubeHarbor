@@ -281,13 +281,24 @@ pub async fn server_action(st: St, Path((ns, name, action)): Path<(String, Strin
             api.delete(&name, &DeleteParams::default()).await?;
             if action == "delete-data" {
                 let pvcs: Api<PersistentVolumeClaim> = Api::namespaced(st.client.clone(), &ns);
-                let _ = pvcs.delete(&format!("data-{name}-0"), &DeleteParams::default()).await;
+                let pvc = format!("data-{name}-0");
+                ignore_not_found(pvcs.delete(&pvc, &DeleteParams::default()).await).map_err(|e| {
+                    anyhow::anyhow!("server {ns}/{name} was deleted, but its world volume {pvc} was not: {e}. Delete it with: kubectl -n {ns} delete pvc {pvc}")
+                })?;
             }
             return Ok(Redirect::to("/").into_response());
         }
         other => return Ok((StatusCode::BAD_REQUEST, format!("unknown action {other}")).into_response()),
     }
     Ok(Redirect::to(&format!("/servers/{ns}/{name}")).into_response())
+}
+
+/// A missing object counts as deleted: there is nothing left to remove.
+fn ignore_not_found<T>(r: kube::Result<T>) -> kube::Result<()> {
+    match r {
+        Err(kube::Error::Api(e)) if e.code == 404 => Ok(()),
+        r => r.map(|_| ()),
+    }
 }
 
 #[derive(Deserialize)]
@@ -510,5 +521,21 @@ mod account_tests {
         assert!(check_new_password("same-password-1", "same-password-1", "same-password-1").is_err());
         // Length counts characters, not bytes.
         assert!(check_new_password("old", "ééééééééééé", "ééééééééééé").is_err());
+    }
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+
+    #[test]
+    fn pvc_delete_ignores_only_not_found() {
+        let api_err = |code: u16| -> kube::Result<()> {
+            Err(kube::Error::Api(Box::new(kube::core::Status { code, ..Default::default() })))
+        };
+        assert!(ignore_not_found(Ok(())).is_ok());
+        assert!(ignore_not_found(api_err(404)).is_ok());
+        assert!(ignore_not_found(api_err(403)).is_err());
+        assert!(ignore_not_found(api_err(500)).is_err());
     }
 }
