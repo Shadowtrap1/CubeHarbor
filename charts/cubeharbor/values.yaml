@@ -264,8 +264,9 @@ dashboard:
   # NetworkPolicy (k3s does by default). kubectl port-forward and the node itself are not affected.
   networkPolicy:
     enabled: null
-    # -- More NetworkPolicyPeers allowed in, e.g. your ingress controller (required when
-    # dashboard.ingress is enabled):
+    # -- More NetworkPolicyPeers allowed in: your ingress controller (required when
+    # dashboard.ingress is enabled), or another cubeharbor release in the cluster that lists this
+    # dashboard in its `remotes`. No cubeharbor component calls the dashboard itself.
     # - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
     allowFrom: []
   service:
