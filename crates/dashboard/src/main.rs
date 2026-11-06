@@ -421,8 +421,9 @@ mod tests {
         assert!(!cross_site(&req(Some("https://dash.example.com"), Some("same-origin"))));
         assert!(cross_site(&req(Some("https://evil.example"), None)));
         assert!(cross_site(&req(None, Some("cross-site"))));
-        // Through a Cloudflare Tunnel: cloudflared keeps the public Host, so the browser's Origin matches.
-        assert!(!cross_site(&req(Some("https://dash.example.com"), Some("same-origin"))));
+        // Through a Cloudflare Tunnel: cloudflared keeps the public Host, so the browser's Origin
+        // matches (also for browsers that don't send Sec-Fetch-Site); a look-alike host doesn't.
+        assert!(!cross_site(&req(Some("https://dash.example.com"), None)));
         assert!(cross_site(&req(Some("https://dash.example.com.evil.example"), None)));
     }
 

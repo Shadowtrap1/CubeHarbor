@@ -452,7 +452,12 @@ around the tunnel and Access.
   ignored. `CF-Connecting-IP` is not used, because any other trusted proxy (e.g. an Ingress
   controller) would pass a forged one through unchanged. Keep `dashboard.service.type: ClusterIP`:
   NodePort/LoadBalancer traffic is often source-NATed to an address inside the pod CIDR, which
-  would make those clients "trusted" and let them pick their own address.
+  would make those clients "trusted" and let them pick their own address. The same goes for
+  every pod in the cluster, including Minecraft server pods running third-party mods and plugins:
+  one could send forged `X-Forwarded-For` headers to the dashboard and spread its password guesses
+  over made-up addresses, so only the overall limit (`dashboard.loginMaxFailuresTotal`) would slow
+  it. Use a long dashboard password, and keep the overall limit on if you run plugins you don't
+  fully trust.
 
 **Locally-managed tunnel (`mode: local`).** If you'd rather keep the routes in Git, create
 the tunnel with the CLI (`cloudflared tunnel login`, `cloudflared tunnel create cubeharbor`,
