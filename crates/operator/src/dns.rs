@@ -32,6 +32,9 @@ pub const DEFAULT_IP_URLS: &str = "https://api.ipify.org,https://ipv4.icanhazip.
 const COMMENT: &str = "managed by cubeharbor";
 const MIN_INTERVAL: Duration = Duration::from_secs(30);
 const FIRST_RETRY: Duration = Duration::from_secs(15);
+/// Even with an unchanged IP, records are re-checked this often, so one deleted or switched to
+/// proxied in Cloudflare is repaired.
+const RESYNC: Duration = Duration::from_secs(3600);
 
 /// A Cloudflare API token. `Debug` never shows it, so it can't leak through a logged config.
 #[derive(Clone)]
@@ -82,7 +85,8 @@ impl Settings {
             let base = cfg.base_domain().ok_or("DNS_RECORDS is empty and there is no BASE_DOMAIN to default to")?;
             records.push(format!("*.{}", cubeharbor_core::crd::normalize_host(base)));
         }
-        records.dedup();
+        let mut seen = std::collections::HashSet::new();
+        records.retain(|r| seen.insert(r.clone()));
         let ip_urls: Vec<String> = csv(&cfg.public_ip_urls).map(str::to_string).collect();
         if ip_urls.is_empty() {
             return Err("PUBLIC_IP_URLS is empty".into());
@@ -321,12 +325,19 @@ impl Cloudflare {
 }
 
 /// What the loop remembers between runs.
-#[derive(Default)]
 pub struct Syncer {
     zone: Option<Zone>,
     last_ip: Option<Ipv4Addr>,
-    /// IP and names of the last fully successful sync; Cloudflare isn't called while both match.
-    synced: Option<(Ipv4Addr, Vec<String>)>,
+    /// IP and names of the last fully successful sync, and when it was; Cloudflare isn't called
+    /// while both match, until `resync` has passed.
+    synced: Option<(Ipv4Addr, Vec<String>, tokio::time::Instant)>,
+    resync: Duration,
+}
+
+impl Default for Syncer {
+    fn default() -> Self {
+        Self { zone: None, last_ip: None, synced: None, resync: RESYNC }
+    }
 }
 
 impl Syncer {
@@ -349,7 +360,7 @@ impl Syncer {
             }
         };
         let (names, outside) = desired_names(&s.records, server_hosts, &zone.name, &s.reserved);
-        if self.synced.as_ref().is_some_and(|(i, n)| *i == ip && *n == names) {
+        if self.synced.as_ref().is_some_and(|(i, n, at)| *i == ip && *n == names && at.elapsed() < self.resync) {
             tracing::debug!("dns: {ip} unchanged, nothing to do");
             return Ok(());
         }
@@ -366,7 +377,7 @@ impl Syncer {
         if failed > 0 {
             bail!("{failed} of {} records could not be updated", names.len());
         }
-        self.synced = Some((ip, names));
+        self.synced = Some((ip, names, tokio::time::Instant::now()));
         Ok(())
     }
 
@@ -558,6 +569,8 @@ mod tests {
         assert_eq!(s.records, strings(&["*.mc.example.com"]));
         assert_eq!(s.zone, "example.com");
         assert_eq!(s.interval, Duration::from_secs(300));
+        let dup = Config::parse_from(["op", "--cloudflare-dns", "true", "--cloudflare-api-token", "t", "--cloudflare-zone", "example.com", "--dns-records", "a.example.com,b.example.com,A.example.com."]);
+        assert_eq!(Settings::from_config(&dup).unwrap().unwrap().records, strings(&["a.example.com", "b.example.com"]));
     }
 
     #[test]
@@ -757,6 +770,30 @@ mod tests {
         assert_eq!(c.last().unwrap(), "PATCH /zones/zone1/dns_records/r1");
         assert!(!c.iter().any(|c| c.starts_with("GET /zones?")), "the zone is looked up once: {c:?}");
         assert_eq!(fake.records.lock().unwrap()[0].content, "81.2.69.161");
+    }
+
+    #[tokio::test]
+    async fn repairs_drift_on_the_periodic_recheck() {
+        let (fake, base, log) = fake("81.2.69.160", vec![]).await;
+        let http = reqwest::Client::new();
+        let s = settings(&base, &["*.mc.example.com"]);
+        let cf = Cloudflare::new(http.clone(), &base, s.token.clone());
+        let mut syncer = Syncer::default();
+        syncer.sync(&http, &cf, &s, &[]).await.unwrap();
+
+        // Someone deletes the record in Cloudflare; the IP stays the same.
+        fake.records.lock().unwrap().clear();
+        log.lock().unwrap().clear();
+        syncer.sync(&http, &cf, &s, &[]).await.unwrap();
+        assert_eq!(calls(&log), vec!["GET /broken-ip", "GET /ip"], "not yet due");
+        assert!(fake.records.lock().unwrap().is_empty());
+
+        // Once the re-check is due (made immediate here), the record comes back.
+        syncer.resync = Duration::ZERO;
+        syncer.sync(&http, &cf, &s, &[]).await.unwrap();
+        assert!(calls(&log).contains(&"POST /zones/zone1/dns_records".to_string()));
+        let records = fake.records.lock().unwrap();
+        assert_eq!((records.len(), records[0].content.as_str(), records[0].proxied), (1, "81.2.69.160", false));
     }
 
     #[tokio::test]

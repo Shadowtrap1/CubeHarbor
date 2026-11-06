@@ -10,7 +10,7 @@ All notable changes are listed here. The format follows
 
 * Optional Cloudflare DNS updates for home installs with a changing public IP
   (`cloudflareDdns.enabled`, off by default). The operator looks up its public IPv4 every
-  `interval` (5m), and when it changed, creates or updates the A records (`*.<baseDomain>` by
+  `interval` (5m), and when it changed, (and hourly, to repair edits made in Cloudflare) creates or updates the A records (`*.<baseDomain>` by
   default, `records` to choose, `serverHostnames` for servers' own hostnames in the zone), always
   as DNS only (not proxied). Other records are left alone. The API token comes from an existing
   Secret, errors are retried with backoff, and no new RBAC is needed. IPv4 only. See "DNS setup"

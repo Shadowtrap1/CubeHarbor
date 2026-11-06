@@ -84,7 +84,7 @@ curseforge:
 cloudflareDdns:
   # Keep Cloudflare DNS records pointed at your public IPv4 address, for home installs whose ISP
   # changes it. The operator looks the address up every `interval` and only calls Cloudflare when
-  # it changed. Records are created when missing and updated when wrong, always as "DNS only"
+  # it changed (plus an hourly re-check that repairs records edited in Cloudflare). Records are created when missing and updated when wrong, always as "DNS only"
   # (proxied: false; Cloudflare's proxy can't carry Minecraft). Other records are left alone and
   # nothing is ever deleted. IPv4 (A records) only.
   enabled: false

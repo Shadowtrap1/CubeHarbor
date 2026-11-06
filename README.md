@@ -205,7 +205,8 @@ helm upgrade cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor -n cubeharbo
 * Every `cloudflareDdns.interval` (5 minutes by default) the operator asks a lookup service for
   its public IPv4 (`cloudflareDdns.ipLookupUrls`: api.ipify.org, then ipv4.icanhazip.com). It
   only calls Cloudflare when the address, or the set of names, changed since the last successful
-  update, and after a restart.
+  update, after a restart, and once an hour (so a record deleted or switched to proxied in the
+  Cloudflare dashboard is repaired).
 * It manages `*.<baseDomain>` by default, or the names in `cloudflareDdns.records`. Add
   `minecraft.publicHost` there if it's a separate name in the zone. With
   `cloudflareDdns.serverHostnames: true`, servers' own hostnames inside the zone are published as
@@ -225,6 +226,10 @@ helm upgrade cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor -n cubeharbo
   15s, 30s, 60s, ... up to the interval. They never restart the operator. Bad settings (no token,
   no zone) turn the feature off with an error in the operator log; the chart refuses to render
   without `existingSecret` and `zone`.
+* **CGNAT.** If your ISP puts you behind carrier-grade NAT (your router's WAN address is in
+  100.64.0.0/10, or differs from what the lookup service reports), the public IP is shared with
+  other customers and port forwarding can't reach you. Updating DNS doesn't help then: ask the
+  ISP for a public IPv4, or use a tunnel/VPS relay for the game port.
 * Only IPv4 (A records). Home IPv6 prefixes change too, but a pod usually has no global IPv6
   route to discover one with, so AAAA records are left alone.
 * The token is read from the Secret at startup (restart the operator after rotating it) and
