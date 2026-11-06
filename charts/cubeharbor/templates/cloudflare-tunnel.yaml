@@ -1,0 +1,111 @@
+{{- $t := .Values.cloudflareTunnel -}}
+{{- if $t.enabled }}
+{{- $fullname := include "cubeharbor.fullname" . -}}
+{{- $local := eq $t.mode "local" -}}
+{{- if not (has $t.mode (list "token" "local")) }}
+{{- fail "cloudflareTunnel.mode must be token or local" }}
+{{- end }}
+{{- if not $t.existingSecret }}
+{{- fail "cloudflareTunnel.existingSecret is required: create a Secret with the tunnel token (or credentials.json for mode=local); the chart never takes the token as a value" }}
+{{- end }}
+{{- if and $local (not $t.tunnelId) }}
+{{- fail "cloudflareTunnel.mode=local needs cloudflareTunnel.tunnelId (the tunnel's UUID)" }}
+{{- end }}
+{{- if and $local .Values.dashboard.enabled (not $t.hostname) }}
+{{- fail "cloudflareTunnel.mode=local needs cloudflareTunnel.hostname, the dashboard's public hostname" }}
+{{- end }}
+{{- if and $local (not .Values.dashboard.enabled) (empty $t.extraIngress) }}
+{{- fail "cloudflareTunnel.mode=local with the dashboard disabled has nothing to route: add cloudflareTunnel.extraIngress rules" }}
+{{- end }}
+{{- $secretKey := $t.existingSecretKey | default (ternary "credentials.json" "token" $local) -}}
+{{- $metrics := include "cubeharbor.listen" (dict "root" . "port" 2000) -}}
+{{- if $local }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-cloudflared
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- include "cubeharbor.cloudflaredConfig" . | nindent 4 }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-cloudflared
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cloudflared
+spec:
+  replicas: {{ $t.replicas }}
+  selector:
+    matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
+      app.kubernetes.io/component: cloudflared
+  template:
+    metadata:
+      labels: {{- include "cubeharbor.selector" . | nindent 8 }}
+        app.kubernetes.io/component: cloudflared
+      {{- if $local }}
+      annotations:
+        # Roll the tunnel when its ingress rules change.
+        checksum/config: {{ include "cubeharbor.cloudflaredConfig" . | sha256sum }}
+      {{- end }}
+    spec:
+      # cloudflared never talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      {{- include "cubeharbor.pod" . | nindent 6 }}
+      {{- include "cubeharbor.scheduling" $t | nindent 6 }}
+      containers:
+        - name: cloudflared
+          image: {{ $t.image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "cubeharbor.containerSecurity" . | nindent 10 }}
+          args:
+            - tunnel
+            - --no-autoupdate
+            - --metrics={{ $metrics }}
+            {{- with $t.protocol }}
+            - --protocol={{ . }}
+            {{- end }}
+            {{- if $local }}
+            - --config=/etc/cloudflared/config/config.yaml
+            {{- end }}
+            {{- range $t.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+            - run
+          {{- if not $local }}
+          env:
+            # Remotely-managed tunnel: routes (public hostnames) are configured in Cloudflare.
+            - name: TUNNEL_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ $t.existingSecret }}, key: {{ $secretKey }} } }
+          {{- else }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/cloudflared/config, readOnly: true }
+            - { name: credentials, mountPath: /etc/cloudflared/credentials, readOnly: true }
+          {{- end }}
+          ports:
+            - { name: metrics, containerPort: 2000 }
+          # /ready answers 200 once the tunnel has at least one connection to Cloudflare's edge.
+          startupProbe:
+            httpGet: { path: /ready, port: metrics }
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet: { path: /ready, port: metrics }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /ready, port: metrics }
+            periodSeconds: 20
+            failureThreshold: 6
+          resources: {{- toYaml $t.resources | nindent 12 }}
+      {{- if $local }}
+      volumes:
+        - name: config
+          configMap: { name: {{ $fullname }}-cloudflared }
+        - name: credentials
+          secret:
+            secretName: {{ $t.existingSecret }}
+            items: [{ key: {{ $secretKey | quote }}, path: credentials.json }]
+      {{- end }}
+{{- end }}

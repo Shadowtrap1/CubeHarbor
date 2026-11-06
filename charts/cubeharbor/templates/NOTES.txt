@@ -25,13 +25,37 @@ cubeharbor is installed.
 {{- if .Values.dashboard.enabled }}
 
 Dashboard:
+{{- if and .Values.cloudflareTunnel.enabled .Values.cloudflareTunnel.hostname }}
+  https://{{ .Values.cloudflareTunnel.hostname }} (Cloudflare Tunnel)
+{{- end }}
 {{- if .Values.dashboard.ingress.enabled }}
   https://{{ .Values.dashboard.ingress.host }}
-{{- else }}
+{{- else if not (and .Values.cloudflareTunnel.enabled .Values.cloudflareTunnel.hostname) }}
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullname }}-dashboard 8080:{{ .Values.dashboard.service.port }}
 {{- end }}
   Password ({{ if or .Values.dashboard.password .Values.dashboard.existingSecret }}the one you set{{ else }}generated; set your own with dashboard.password{{ end }}):
   kubectl -n {{ .Release.Namespace }} get secret {{ .Values.dashboard.existingSecret | default (printf "%s-dashboard" $fullname) }} -o jsonpath='{.data.password}' | base64 -d; echo
+{{- end }}
+
+{{- if .Values.cloudflareTunnel.enabled }}
+
+Cloudflare Tunnel ({{ .Values.cloudflareTunnel.replicas }} cloudflared replica(s), mode {{ .Values.cloudflareTunnel.mode }}):
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=cloudflared
+{{- if and (eq .Values.cloudflareTunnel.mode "token") .Values.dashboard.enabled }}
+  In Cloudflare, the tunnel's public hostname must point at: {{ include "cubeharbor.dashboardUrl" . }}
+  (leave "HTTP Host Header" empty: the dashboard compares the browser's Origin with Host).
+{{- end }}
+  Put Cloudflare Access in front of the hostname so only people you allow reach the login page.
+  Players do NOT go through the tunnel: they connect to the {{ ternary "mc-router" "gateway" $mcr }} above, which needs a port
+  forward on your router and DNS pointing at your public IP (see cloudflareDdns).
+{{- if not .Values.dashboard.trustedProxies }}
+WARNING: dashboard.trustedProxies is empty, so every tunnel visitor shares one failed-login limit.
+  Set it to your pod CIDR: kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
+{{- end }}
+{{- if ne .Values.dashboard.service.type "ClusterIP" }}
+WARNING: dashboard.service.type is {{ .Values.dashboard.service.type }}. With the tunnel, keep it ClusterIP: traffic from a
+  NodePort/LoadBalancer can arrive from an address in dashboard.trustedProxies and bypass the tunnel.
+{{- end }}
 {{- end }}
 
 {{- if not .Values.minecraft.acceptEula }}

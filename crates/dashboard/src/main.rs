@@ -421,6 +421,9 @@ mod tests {
         assert!(!cross_site(&req(Some("https://dash.example.com"), Some("same-origin"))));
         assert!(cross_site(&req(Some("https://evil.example"), None)));
         assert!(cross_site(&req(None, Some("cross-site"))));
+        // Through a Cloudflare Tunnel: cloudflared keeps the public Host, so the browser's Origin matches.
+        assert!(!cross_site(&req(Some("https://dash.example.com"), Some("same-origin"))));
+        assert!(cross_site(&req(Some("https://dash.example.com.evil.example"), None)));
     }
 
     #[test]
@@ -442,6 +445,28 @@ mod tests {
         // Garbage stops the walk at the last good address.
         assert_eq!(client_ip(ip("10.1.1.1"), &headers("nonsense"), &trusted), ip("10.1.1.1"));
         assert_eq!(client_ip(ip("10.1.1.1"), &HeaderMap::new(), &trusted), ip("10.1.1.1"));
+    }
+
+    #[test]
+    fn client_ip_behind_cloudflare_tunnel() {
+        // cloudflared runs in a pod (dashboard.trustedProxies = pod CIDR) and passes on the edge's
+        // X-Forwarded-For, which ends with the visitor's address.
+        let trusted = cidr::parse_list("10.42.0.0/16").unwrap();
+        let headers = |xff: &str| {
+            let mut h = HeaderMap::new();
+            h.insert("x-forwarded-for", xff.parse().unwrap());
+            h.insert("cf-connecting-ip", "198.51.100.7".parse().unwrap());
+            h
+        };
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let cloudflared = ip("10.42.0.17");
+        assert_eq!(client_ip(cloudflared, &headers("198.51.100.7"), &trusted), ip("198.51.100.7"));
+        assert_eq!(client_ip(cloudflared, &headers("2001:db8::7"), &trusted), ip("2001:db8::7"));
+        // A visitor sending their own X-Forwarded-For only adds entries left of the edge's.
+        assert_eq!(client_ip(cloudflared, &headers("6.6.6.6, 198.51.100.7"), &trusted), ip("198.51.100.7"));
+        // Clients outside the pod CIDR (port-forward, a hostNetwork pod) can't pick an address.
+        assert_eq!(client_ip(ip("127.0.0.1"), &headers("6.6.6.6"), &trusted), ip("127.0.0.1"));
+        assert_eq!(client_ip(ip("192.168.1.20"), &headers("6.6.6.6"), &trusted), ip("192.168.1.20"));
     }
 
     #[test]

@@ -378,6 +378,105 @@ server awake. The gateway still forwards voice chat, Bedrock and extra ports. Gi
 [`examples/values-mc-router.yaml`](examples/values-mc-router.yaml) is a full example on the
 standard port 25565, with notes for running next to another setup that already owns 25565.
 
+## Remote access with Cloudflare Tunnel
+
+On a home connection you can reach the dashboard from anywhere without opening a router port for
+it: `cloudflareTunnel.enabled` runs [cloudflared](https://github.com/cloudflare/cloudflared),
+which dials out to Cloudflare and carries `https://<your hostname>` to the dashboard Service.
+It needs a domain on Cloudflare (a free plan is enough).
+
+> **The tunnel only carries the dashboard.** Minecraft player traffic does not go through it:
+> players connect to the gateway directly, so the gateway's port (25565, plus `minecraft.portRange`
+> for voice chat/Bedrock) still needs a port forward on your router, and `*.<baseDomain>` needs a
+> DNS record pointing at your public IP. With a dynamic IP, see
+> [Dynamic DNS with Cloudflare](#dynamic-dns-with-cloudflare). Don't point the game hostnames at
+> the tunnel: proxied (orange-cloud) records only carry HTTP(S).
+
+**1. Create the tunnel** (remotely-managed, the default `mode: token`). In the Cloudflare
+dashboard, go to *Zero Trust → Networks → Tunnels → Create a tunnel*, pick *Cloudflared*, give
+it a name and copy the token from the install command (the long string after `--token`). You
+don't need to run that command: the chart runs cloudflared.
+
+**2. Add a public hostname** to the tunnel (*Public Hostname → Add*): e.g. `dash.example.com`,
+service type **HTTP**, URL `<release>-dashboard.<namespace>.svc:<dashboard.service.port>`. With the
+Quick start install that's `http://cubeharbor-dashboard.cubeharbor.svc:80`, and `helm install`
+prints the exact URL. Leave *HTTP Host Header* empty: the dashboard refuses form posts whose
+browser `Origin` doesn't match the `Host` it receives, and cloudflared passes the public
+hostname as `Host` by default.
+
+**3. Store the token in a Secret.** The chart never takes it as a value:
+
+```sh
+kubectl -n cubeharbor create secret generic cubeharbor-cloudflare-tunnel --from-literal=token='<tunnel token>'
+```
+
+**4. Turn it on** ([`examples/values-cloudflare-tunnel.yaml`](examples/values-cloudflare-tunnel.yaml)):
+
+```yaml
+dashboard:
+  trustedProxies: [10.42.0.0/16]     # your pod CIDR (k3s default); see below
+cloudflareTunnel:
+  enabled: true
+  existingSecret: cubeharbor-cloudflare-tunnel
+  hostname: dash.example.com
+```
+
+The cloudflared pods (2 replicas by default, `cloudflare/cloudflared` pinned in
+`cloudflareTunnel.image`) run as non-root with a read-only filesystem and no ServiceAccount
+token, and are only marked ready once `/ready` on their metrics port reports a connection to
+Cloudflare. If your network blocks outbound UDP (QUIC on port 7844), set
+`cloudflareTunnel.protocol: http2`.
+
+**5. Put Cloudflare Access in front of it (strongly recommended).** Without it, anyone who finds
+the hostname gets the login page, and the only things between them and your servers are the
+dashboard password and its login rate limit. In *Zero Trust → Access → Applications*, add a
+self-hosted application for `dash.example.com` with a policy that allows only your email
+addresses (one-time PIN or an identity provider). Visitors then sign in to Cloudflare before
+the request ever reaches your cluster. The dashboard does not check the `Cf-Access-Jwt-Assertion`
+header itself, so keep its Service `ClusterIP` (the default), so it can't be reached
+around the tunnel and Access.
+
+**What the chart changes on the dashboard with the tunnel on:**
+
+* The session cookie is marked `Secure` (`COOKIE_SECURE`), since visitors use HTTPS.
+* `cloudflareTunnel.hostname` is reserved like the dashboard's Ingress host, so servers can't
+  claim it with `expose: ingress`.
+* **Client IPs for the login rate limit:** Cloudflare's edge sends the visitor's address as the
+  last entry of `X-Forwarded-For` (and in `CF-Connecting-IP`), and cloudflared passes it on. The
+  dashboard only believes `X-Forwarded-For` from peers in `dashboard.trustedProxies`, walking it
+  from the right, so set that to your **pod CIDR** (where the cloudflared pods get their
+  addresses: `kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'`; k3s uses
+  `10.42.0.0/16`, kind `10.244.0.0/16`). Otherwise every tunnel visitor shares one failed-login
+  limit. A visitor's own `X-Forwarded-For` entries end up to the left of Cloudflare's and are
+  ignored. `CF-Connecting-IP` is not used, because any other trusted proxy (e.g. an Ingress
+  controller) would pass a forged one through unchanged. Keep `dashboard.service.type: ClusterIP`:
+  NodePort/LoadBalancer traffic is often source-NATed to an address inside the pod CIDR, which
+  would make those clients "trusted" and let them pick their own address.
+
+**Locally-managed tunnel (`mode: local`).** If you'd rather keep the routes in Git, create
+the tunnel with the CLI (`cloudflared tunnel login`, `cloudflared tunnel create cubeharbor`,
+`cloudflared tunnel route dns cubeharbor dash.example.com`), store its credentials file and let
+the chart render the ingress rules:
+
+```sh
+kubectl -n cubeharbor create secret generic cubeharbor-cloudflare-tunnel \
+  --from-file=credentials.json=$HOME/.cloudflared/<tunnel-id>.json
+```
+
+```yaml
+cloudflareTunnel:
+  enabled: true
+  mode: local
+  existingSecret: cubeharbor-cloudflare-tunnel     # key credentials.json
+  tunnelId: <tunnel-id>
+  hostname: dash.example.com                       # -> the dashboard Service
+  extraIngress:                                    # optional, before the final 404 rule
+    - { hostname: map.example.com, service: "http://lobby-map.minecraft.svc:8100" }
+```
+
+The chart writes these rules into a ConfigMap (`<release>-cloudflared`) and restarts cloudflared
+when they change. Protect every extra hostname with Access too.
+
 ## Customizing
 
 **Dashboard look and form defaults** go under `dashboard.site` in your Helm values. The chart
@@ -440,8 +539,10 @@ every namespace the dashboard manages.
   (`dashboard.loginMaxFailuresTotal`; 0 turns the overall limit off, so nobody can block other
   people's logins). Behind an Ingress, list the ingress controller's pod CIDR in
   `dashboard.trustedProxies` so clients are told apart by `X-Forwarded-For`; otherwise they share
-  one limit. Serve the dashboard over TLS: the cookie
-  is marked `Secure` automatically when the Ingress has `tls`, or set `dashboard.cookieSecure`.
+  one limit (with a Cloudflare Tunnel, list the pod CIDR). Serve the dashboard over TLS: the cookie
+  is marked `Secure` automatically when the Ingress has `tls` or `cloudflareTunnel` is on, or set
+  `dashboard.cookieSecure`. Exposed to the internet (Ingress or tunnel), put an authenticating
+  proxy such as [Cloudflare Access](#remote-access-with-cloudflare-tunnel) in front of it.
 * **Namespaces.** The dashboard only manages its default namespace plus
   `dashboard.allowedNamespaces`, and its RBAC (including `get` on Secrets for RCON) is granted
   per namespace. `["*"]` restores cluster-wide access. Set `minecraft.watchNamespace` to keep

@@ -217,7 +217,8 @@ dashboard:
   # -- Extra namespaces the dashboard may manage (RBAC is granted per namespace). `["*"]` grants
   # cluster-wide access, including get on every Secret: avoid unless you need it.
   allowedNamespaces: []
-  # -- Mark the session cookie Secure. Defaults to on when the dashboard Ingress has TLS.
+  # -- Mark the session cookie Secure. Always on when the dashboard Ingress has TLS or
+  # cloudflareTunnel is enabled.
   cookieSecure: false
   # -- Other setups shown on the dashboard and in /api/v1/servers (read-only).
   # Each url returns a server list: games-dashboard /api/servers or another cubeharbor /api/v1/servers.
@@ -230,7 +231,9 @@ dashboard:
   publicServerList: false
   # -- CIDRs of proxies in front of the dashboard (e.g. the ingress controller's pod network).
   # Their X-Forwarded-For is believed when rate-limiting failed logins per client; without it,
-  # all clients behind the proxy share one limit.
+  # all clients behind the proxy share one limit. With cloudflareTunnel, list the cluster's pod
+  # CIDR (k3s: 10.42.0.0/16; see `kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'`) and
+  # keep service.type ClusterIP, so only in-cluster proxies can reach the dashboard.
   trustedProxies: []
   # -- Failed logins per minute across all clients before every login gets 429 (0 = no global
   # limit; each client is always limited to 10 a minute). Lower slows distributed guessing of a
@@ -266,6 +269,54 @@ dashboard:
   resources:
     requests: { cpu: 20m, memory: 32Mi }
     limits: { memory: 256Mi }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+# -- Reach the dashboard from outside your network through a Cloudflare Tunnel: cloudflared
+# dials out to Cloudflare, so no router port is opened for the dashboard. Only the dashboard
+# (HTTP) goes through it: players still connect to the gateway directly (port forward + DNS,
+# see cloudflareDdns). Put Cloudflare Access in front of the hostname. Setup: README,
+# "Remote access with Cloudflare Tunnel".
+cloudflareTunnel:
+  enabled: false
+  # -- `token`: remotely-managed tunnel, public hostnames are configured in the Cloudflare
+  # dashboard and the Secret holds the tunnel token. `local`: locally-managed tunnel, the Secret
+  # holds the tunnel's credentials.json and the chart renders the ingress rules below.
+  mode: token
+  # -- Existing Secret with the tunnel token (or credentials.json for mode=local). Required: the
+  # chart never takes the token as a value. E.g.
+  # `kubectl -n cubeharbor create secret generic cubeharbor-cloudflare-tunnel --from-literal=token=<token>`.
+  existingSecret: ""
+  # -- Key in existingSecret (default `token`, or `credentials.json` for mode=local).
+  existingSecretKey: ""
+  # -- Public hostname of the dashboard, e.g. dash.example.com. Required for mode=local (it's the
+  # ingress rule); with mode=token it's informational. Either way servers can't claim it with
+  # `expose: ingress`.
+  hostname: ""
+  # -- mode=local: the tunnel's UUID (`cloudflared tunnel list`).
+  tunnelId: ""
+  # -- mode=local: more ingress rules, inserted after the dashboard's and before the final 404,
+  # e.g. a web map: `- { hostname: map.example.com, service: "http://lobby-map.minecraft.svc:8100" }`.
+  extraIngress: []
+  # -- mode=local: top-level originRequest settings (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/configure-tunnels/cloudflared-parameters/origin-parameters/).
+  # Don't set httpHostHeader for the dashboard: it checks the browser's Origin against Host.
+  originRequest: {}
+  # -- Pinned for reproducible installs; bump deliberately (https://github.com/cloudflare/cloudflared/releases).
+  image: cloudflare/cloudflared:2026.10.7
+  # -- Each replica holds its own connections to Cloudflare; 2 keeps the dashboard reachable
+  # while one restarts.
+  replicas: 2
+  # -- Edge transport: auto (default, QUIC with HTTP/2 fallback), quic or http2. Use http2 if
+  # your network blocks outbound UDP 7844.
+  protocol: ""
+  # -- Extra `cloudflared tunnel` flags, e.g. [--loglevel=debug].
+  extraArgs: []
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 128Mi }
   nodeSelector: {}
   tolerations: []
   affinity: {}

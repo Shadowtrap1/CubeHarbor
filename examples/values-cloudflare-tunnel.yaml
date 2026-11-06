@@ -1,0 +1,26 @@
+# Reach the dashboard from anywhere through a Cloudflare Tunnel, without opening a router port for
+# it. Players still connect to the gateway directly (port forward + DNS); the tunnel only carries
+# the dashboard. Setup steps: README, "Remote access with Cloudflare Tunnel".
+#
+#   kubectl -n cubeharbor create secret generic cubeharbor-cloudflare-tunnel --from-literal=token='<tunnel token>'
+#   helm upgrade --install cubeharbor charts/cubeharbor -n cubeharbor --create-namespace -f examples/values-cloudflare-tunnel.yaml
+#
+# In Cloudflare, the tunnel's public hostname dash.example.com points at
+# http://cubeharbor-dashboard.cubeharbor.svc:80, with a Cloudflare Access application in front.
+minecraft:
+  acceptEula: true
+  baseDomain: mc.example.com          # DNS: *.mc.example.com -> your public IP (see cloudflareDdns)
+
+dashboard:
+  # The pod CIDR, so cloudflared's X-Forwarded-For is believed and each visitor gets their own
+  # failed-login limit. k3s default shown; check with
+  #   kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
+  trustedProxies: [10.42.0.0/16]
+  service:
+    type: ClusterIP                   # only reachable in-cluster: through the tunnel or port-forward
+
+cloudflareTunnel:
+  enabled: true
+  existingSecret: cubeharbor-cloudflare-tunnel
+  hostname: dash.example.com          # shown in NOTES, and reserved from servers' `expose: ingress`
+  # protocol: http2                   # if outbound UDP 7844 is blocked on your network

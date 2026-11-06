@@ -139,7 +139,10 @@ spec:
             - { name: ALLOW_IMAGE_OVERRIDE, value: {{ .Values.minecraft.allowImageOverride | quote }} }
             - { name: ALLOWED_IMAGE_PREFIXES, value: {{ join "," .Values.minecraft.allowedImagePrefixes | quote }} }
             - { name: INGRESS_HOST_SUFFIXES, value: {{ join "," .Values.minecraft.ingressHostSuffixes | quote }} }
-            - { name: RESERVED_HOSTS, value: {{ ternary .Values.dashboard.ingress.host "" (and .Values.dashboard.enabled .Values.dashboard.ingress.enabled) | quote }} }
+            {{- $reserved := list }}
+            {{- if and .Values.dashboard.enabled .Values.dashboard.ingress.enabled }}{{ $reserved = append $reserved .Values.dashboard.ingress.host }}{{ end }}
+            {{- if and .Values.cloudflareTunnel.enabled .Values.cloudflareTunnel.hostname }}{{ $reserved = append $reserved .Values.cloudflareTunnel.hostname }}{{ end }}
+            - { name: RESERVED_HOSTS, value: {{ join "," $reserved | quote }} }
             - { name: RCON_NETWORK_POLICY, value: {{ .Values.minecraft.rconNetworkPolicy | quote }} }
             - { name: DASHBOARD_NAMESPACE, value: {{ .Release.Namespace | quote }} }
             - { name: DASHBOARD_SELECTOR, value: {{ printf "app.kubernetes.io/name=cubeharbor,app.kubernetes.io/instance=%s,app.kubernetes.io/component=dashboard" .Release.Name | quote }} }
