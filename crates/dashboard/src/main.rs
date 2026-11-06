@@ -303,7 +303,7 @@ async fn auth(State(st): St, jar: CookieJar, mut req: Request, next: Next) -> Re
                 Some((name, role)) => Identity { name, role, session: None },
                 None => {
                     st.record_failure(client, "API token");
-                    return (StatusCode::UNAUTHORIZED, "unauthorized: use an API token from the Account page").into_response();
+                    return (StatusCode::UNAUTHORIZED, bearer_hint(token)).into_response();
                 }
             }
         }
@@ -321,6 +321,17 @@ async fn auth(State(st): St, jar: CookieJar, mut req: Request, next: Next) -> Re
     }
     req.extensions_mut().insert(me);
     next.run(req).await
+}
+
+/// The 401 body for a rejected Bearer token. Anything that isn't shaped like a `chb_` token is
+/// most likely a script still sending the old dashboard password.
+fn bearer_hint(presented: &str) -> &'static str {
+    if presented.trim().starts_with("chb_") {
+        "unauthorized: this API token is unknown or was revoked; create a new one on the dashboard's Account page (/account)"
+    } else {
+        "unauthorized: the dashboard password is no longer accepted as a Bearer token; log in, create an API token \
+         on the Account page (/account) and send it as `Authorization: Bearer chb_...`"
+    }
 }
 
 #[tokio::main]
@@ -509,6 +520,12 @@ mod tests {
         f.max_total = 0;
         assert!(!f.limited(ip("192.0.2.2")));
         assert!(f.limited(ip("192.0.2.1")), "the per-client limit still applies");
+    }
+
+    #[test]
+    fn bearer_hints() {
+        assert!(bearer_hint("my-old-dashboard-password").contains("no longer accepted"));
+        assert!(bearer_hint("chb_0123_abcd").contains("unknown or was revoked"));
     }
 
     #[test]

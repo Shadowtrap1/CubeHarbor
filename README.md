@@ -325,7 +325,8 @@ Create an API token on the dashboard's **Account** page and send it as
 `Authorization: Bearer chb_...` (a session cookie works too). A token acts as the user who made
 it, with that user's current role, so a token from a `viewer` can only read. It is shown once;
 revoke it on the same page. Removing the user, or an admin resetting their password, revokes
-their tokens. The login password is no longer accepted as a Bearer token. Browsers on other
+their tokens. The login password is no longer accepted as a Bearer token: such requests get
+`401` with a message saying to create a token. Browsers on other
 origins need `dashboard.corsOrigins`. `dashboard.publicServerList: true` makes the list readable without a login.
 
 | Endpoint | |

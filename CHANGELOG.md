@@ -43,7 +43,9 @@ All notable changes are listed here. The format follows
 * **Breaking (dashboard):** log in with a user name. On upgrade, the existing password becomes
   user `admin`; after that `dashboard.password` is only used to recreate `admin` when the users
   Secret is empty (see the README for recovering a locked-out install). The password is no
-  longer accepted as a `Bearer` token on `/api`: create an API token on the Account page. A
+  longer accepted as a `Bearer` token on `/api` (such requests get `401` with a hint saying so).
+  To migrate a script: log in, open **Account → API tokens**, create a token (as a `viewer` user
+  if the script only reads), and send `Authorization: Bearer chb_...` instead of the password. A
   password change no longer writes `dashboard.password`'s Secret; `PASSWORD_SECRET` is replaced
   by `USERS_SECRET`, and `dashboard.allowPasswordChange` by `dashboard.manageUsers` (setting
   `allowPasswordChange: false` still turns it off).
