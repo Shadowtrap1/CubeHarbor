@@ -15,6 +15,15 @@ All notable changes are listed here. The format follows
   `serverHostnames` for servers' own hostnames in the zone), always as DNS only (not proxied). Other records are left alone. The API token comes from an existing
   Secret, errors are retried with backoff, and no new RBAC is needed. IPv4 only. See "DNS setup"
   in the README.
+* Chart: optional Cloudflare Tunnel for reaching the dashboard from outside your network
+  without opening a router port (`cloudflareTunnel.enabled`, off by default). It runs a pinned
+  `cloudflare/cloudflared` Deployment with a remotely-managed tunnel whose token comes from an
+  existing Secret (`existingSecret`; never a plain value), or with `mode: local`, a
+  locally-managed tunnel from a `credentials.json` Secret plus ingress rules the chart renders
+  from values. With the tunnel on, the session cookie is `Secure` and `cloudflareTunnel.hostname`
+  is reserved (servers can't claim it with `expose: ingress`, and DDNS never manages it). The README covers the Cloudflare setup, Cloudflare
+  Access, and setting `dashboard.trustedProxies` to the pod CIDR so failed logins are limited per
+  visitor. Player traffic does not use the tunnel. See `examples/values-cloudflare-tunnel.yaml`.
 * Dashboard: an **Account** page to change the login password (current password required,
   at least 12 characters). It's saved to the dashboard's Secret and logs out other sessions
   (`dashboard.allowPasswordChange`, on by default; off with `existingSecret`). The README now

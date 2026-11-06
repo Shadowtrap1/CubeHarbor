@@ -172,7 +172,7 @@ spec:
             - { name: TRUSTED_PROXIES, value: {{ join "," .Values.dashboard.trustedProxies | quote }} }
             - { name: LOGIN_MAX_FAILURES_TOTAL, value: {{ .Values.dashboard.loginMaxFailuresTotal | quote }} }
             - { name: ALLOWED_NAMESPACES, value: {{ ternary "*" (include "cubeharbor.dashboardNamespaces" .) $all | quote }} }
-            - { name: COOKIE_SECURE, value: {{ .Values.dashboard.cookieSecure | default (and .Values.dashboard.ingress.enabled (not (empty .Values.dashboard.ingress.tls))) | quote }} }
+            - { name: COOKIE_SECURE, value: {{ or .Values.dashboard.cookieSecure (and .Values.dashboard.ingress.enabled (not (empty .Values.dashboard.ingress.tls))) .Values.cloudflareTunnel.enabled | quote }} }
             - { name: SITE_CONFIG, value: /etc/cubeharbor-dashboard/site.yaml }
             {{- include "cubeharbor.curseforgeEnv" . | nindent 12 }}
           volumeMounts:

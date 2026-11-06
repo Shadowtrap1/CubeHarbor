@@ -149,3 +149,27 @@ priorityClassName: {{ . }}
     resources: [persistentvolumeclaims]
     verbs: [get, delete]
 {{- end -}}
+
+{{/* In-cluster URL of the dashboard, for the tunnel to forward to. */}}
+{{- define "cubeharbor.dashboardUrl" -}}
+http://{{ include "cubeharbor.fullname" . }}-dashboard.{{ .Release.Namespace }}.svc:{{ .Values.dashboard.service.port }}
+{{- end -}}
+
+{{/* cloudflared config.yaml for a locally-managed tunnel (cloudflareTunnel.mode=local). */}}
+{{- define "cubeharbor.cloudflaredConfig" -}}
+{{- $t := .Values.cloudflareTunnel -}}
+tunnel: {{ $t.tunnelId | quote }}
+credentials-file: /etc/cloudflared/credentials/credentials.json
+{{- with $t.originRequest }}
+originRequest: {{- toYaml . | nindent 2 }}
+{{- end }}
+ingress:
+{{- if .Values.dashboard.enabled }}
+  - hostname: {{ $t.hostname | quote }}
+    service: {{ include "cubeharbor.dashboardUrl" . | quote }}
+{{- end }}
+{{- with $t.extraIngress }}
+{{- toYaml . | nindent 2 }}
+{{- end }}
+  - service: http_status:404
+{{- end -}}
