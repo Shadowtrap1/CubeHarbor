@@ -92,20 +92,50 @@ helm install cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor --version 0.
 #    (or let cubeharbor keep it updated on Cloudflare, see "DNS setup")
 kubectl -n cubeharbor get svc cubeharbor-gateway
 
-# 3. Open the dashboard and log in with the generated password
+# 3. Open the dashboard and log in as "admin" with the generated password
 kubectl -n cubeharbor port-forward svc/cubeharbor-dashboard 8080:80
 kubectl -n cubeharbor get secret cubeharbor-dashboard -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
-To choose the dashboard password yourself, add `--set-string dashboard.password='<at least 12
-characters>'` to the install (or `helm upgrade --reuse-values` later), or keep it in your own Secret
-with a `password` key and set `dashboard.existingSecret`. Without either, a random 24-character
-password is generated once and kept across upgrades. Once logged in, you can also change it on the
-dashboard's **Account** page (`dashboard.allowPasswordChange`, on by default): it's saved to the
-same Secret, and every other session is logged out. This is off with `dashboard.existingSecret`
-(change the password where that Secret comes from). Installs rendered with `helm template` (Argo
-CD, Flux post-rendering) re-render the Secret on every sync, which reverts a changed password, so
-set `dashboard.password` and turn `allowPasswordChange` off there.
+The first dashboard user is `admin`. To choose its password yourself, add
+`--set-string dashboard.password='<at least 12 characters>'` to the install, or keep it in your
+own Secret with a `password` key and set `dashboard.existingSecret`. Without either, a random
+24-character password is generated once and kept across upgrades.
+
+### Users and roles
+
+The dashboard has named users, each with their own password and one role:
+
+| Role | Can |
+|---|---|
+| `viewer` | See servers, their logs, spec and compose files; manage their own password and API tokens |
+| `operator` | Also start, stop and restart servers and use the RCON console |
+| `admin` | Everything: create, edit and delete servers, import compose files, manage users |
+
+Admins add and remove users, change roles and reset passwords on the **Users** page; there is
+always at least one admin. Everyone changes their own password and creates API tokens on the
+**Account** page. Roles are checked by the server on every page and `/api` request, not just by
+hiding buttons. Adding a user, resetting a password and creating a token ask for your own
+password again, so a stolen session can't be turned into a lasting login.
+
+Users are stored in the `<release>-dashboard-users` Secret (`users.json`: argon2id password
+hashes, SHA-256 hashes of API tokens), the only Secret the dashboard can write. The chart
+creates it without data, so `helm upgrade` and GitOps syncs leave the users alone (but don't use
+Argo CD's `Replace=true` or `helm upgrade --force` on it). `dashboard.password` is only used
+while that Secret has no users: on the first start, `admin` is created with it. **Upgrading**
+from a single-password install works the same way: your current password becomes user `admin`.
+Changing `dashboard.password` later does nothing; change passwords in the dashboard.
+
+Locked out? Remove the users and restart; `admin` is created again from `dashboard.password`
+(other users are lost):
+
+```sh
+kubectl -n cubeharbor patch secret cubeharbor-dashboard-users --type=json -p '[{"op":"remove","path":"/data/users.json"}]'
+kubectl -n cubeharbor rollout restart deploy/cubeharbor-dashboard
+```
+
+`dashboard.manageUsers: false` keeps the old behaviour of a single login: `admin` with
+`dashboard.password`, no Users page, no password changes and no API tokens.
 
 Before you expose the dashboard, read [Security notes](#security-notes) and give it an Ingress
 with TLS (`dashboard.ingress`). [`examples/values-k3s.yaml`](examples/values-k3s.yaml) is a
@@ -291,7 +321,11 @@ servers" in the Compose tab to copy an existing server into a new one.
 
 ## API (for central dashboards)
 
-Log in with the dashboard password as a `Bearer` token (or a session cookie). Browsers on other
+Create an API token on the dashboard's **Account** page and send it as
+`Authorization: Bearer chb_...` (a session cookie works too). A token acts as the user who made
+it, with that user's current role, so a token from a `viewer` can only read. It is shown once;
+revoke it on the same page. Removing the user, or an admin resetting their password, revokes
+their tokens. The login password is no longer accepted as a Bearer token. Browsers on other
 origins need `dashboard.corsOrigins`. `dashboard.publicServerList: true` makes the list readable without a login.
 
 | Endpoint | |
@@ -320,8 +354,8 @@ games-dashboard, another cubeharbor (`/api/v1/servers`), or any URL that returns
 `{name, address, online, players, version}`.
 
 ```sh
-curl -H "Authorization: Bearer $PW" https://cubeharbor.example.com/api/v1/servers
-curl -H "Authorization: Bearer $PW" --data-binary @network.yaml 'https://cubeharbor.example.com/api/v1/compose?dry_run=true'
+curl -H "Authorization: Bearer $TOKEN" https://cubeharbor.example.com/api/v1/servers
+curl -H "Authorization: Bearer $TOKEN" --data-binary @network.yaml 'https://cubeharbor.example.com/api/v1/compose?dry_run=true'
 ```
 
 ## Large modpacks
@@ -534,13 +568,16 @@ docker run --rm -it -m 4g -p 25565:25565 -v $PWD/data:/data cubeharbor-server:de
 
 ## Security notes
 
-Treat the dashboard password like a cluster credential: it can create and change servers in
-every namespace the dashboard manages.
+Treat an admin's password and API tokens like a cluster credential: they can create and change
+servers in every namespace the dashboard manages. Give people `viewer` or `operator` unless they
+need more.
 
-* **Dashboard login.** One password, generated on install and stored in a Secret; also accepted
-  as a `Bearer` token for `/api/*`. Logins get a random session token that lasts 7 days and is
-  revoked on logout (and on a dashboard restart). The dashboard refuses to start with an empty
-  password. A client with 10 failed password checks in a minute gets `429` until the minute is
+* **Dashboard login.** Named users with roles ([Users and roles](#users-and-roles)). Passwords
+  are hashed with argon2id (random salt, 19 MiB, 2 passes); API tokens are 256 random bits,
+  stored as SHA-256. Logins get a random session token that lasts 7 days and is revoked on
+  logout, on a dashboard restart, when the user changes their password (other sessions only),
+  and when an admin resets it or removes the user. Role changes apply to existing sessions
+  straight away. A client with 10 failed password or token checks in a minute gets `429` until the minute is
   over, and so does everyone once 100 failures a minute come in overall
   (`dashboard.loginMaxFailuresTotal`; 0 turns the overall limit off, so nobody can block other
   people's logins). Behind an Ingress, list the ingress controller's pod CIDR in
