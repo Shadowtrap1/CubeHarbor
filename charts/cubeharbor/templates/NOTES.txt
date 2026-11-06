@@ -33,7 +33,7 @@ Dashboard:
 {{- else if not (and .Values.cloudflareTunnel.enabled .Values.cloudflareTunnel.hostname) }}
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullname }}-dashboard 8080:{{ .Values.dashboard.service.port }}
 {{- end }}
-  Password ({{ if or .Values.dashboard.password .Values.dashboard.existingSecret }}the one you set{{ else }}generated; set your own with dashboard.password{{ end }}):
+  User: admin. Password ({{ if or .Values.dashboard.password .Values.dashboard.existingSecret }}the one you set{{ else }}generated; set your own with dashboard.password{{ end }}):
   kubectl -n {{ .Release.Namespace }} get secret {{ .Values.dashboard.existingSecret | default (printf "%s-dashboard" $fullname) }} -o jsonpath='{.data.password}' | base64 -d; echo
 {{- end }}
 

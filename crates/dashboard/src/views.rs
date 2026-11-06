@@ -4,6 +4,7 @@ use kube::ResourceExt;
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 
 use crate::AppState;
+use crate::users::{Identity, Role};
 use crate::api::{SourceStatus, Summary};
 use crate::site::{self, Site};
 
@@ -30,7 +31,10 @@ fn brand(site: &Site) -> Markup {
     }
 }
 
-fn layout(title: &str, body: Markup) -> Markup {
+/// Page with the header. `me` is None on pages without a known user (errors), which get the plain
+/// navigation; links a user's role can't use are left out (the server refuses them anyway).
+fn layout(title: &str, me: Option<&Identity>, body: Markup) -> Markup {
+    let admin = me.is_some_and(|m| m.can(Role::Admin));
     let site = site::get();
     html! {
         (DOCTYPE)
@@ -40,12 +44,15 @@ fn layout(title: &str, body: Markup) -> Markup {
                 header {
                     a.brand href="/" { (brand(site)) }
                     nav {
-                        a href="/" { "Servers" } a href="/new" { "New server" } a href="/new#compose" { "Compose" } a href="/compose/export" { "Export compose" }
+                        a href="/" { "Servers" }
+                        @if admin { a href="/new" { "New server" } a href="/new#compose" { "Compose" } }
+                        a href="/compose/export" { "Export compose" }
+                        @if admin { a href="/users" { "Users" } }
                         @for l in &site.links {
                             @if l.new_tab { a href=(l.url) target="_blank" rel="noopener" { (l.label) } } @else { a href=(l.url) { (l.label) } }
                         }
                     }
-                    a href="/account" { "Account" }
+                    a href="/account" { @if let Some(m) = me { (m.name) " · " (m.role.as_str()) } @else { "Account" } }
                     form method="post" action="/logout" { button { "Log out" } }
                 }
                 main { (body) }
@@ -56,7 +63,7 @@ fn layout(title: &str, body: Markup) -> Markup {
 }
 
 pub fn error_page(msg: &str) -> Markup {
-    layout("Error", html! { h1 { "Something went wrong" } .card.error { pre.mono { (msg) } } a href="javascript:history.back()" { "← Back" } })
+    layout("Error", None, html! { h1 { "Something went wrong" } .card.error { pre.mono { (msg) } } a href="javascript:history.back()" { "← Back" } })
 }
 
 pub fn login(err: Option<&str>) -> Markup {
@@ -68,39 +75,146 @@ pub fn login(err: Option<&str>) -> Markup {
             h1.brand-title { (brand(site)) }
             .card { form method="post" action="/login" {
                 @if let Some(e) = err { .error { (e) } }
-                label { "Password" } input type="password" name="password" autofocus;
+                label { "User name" } input name="username" autocomplete="username" autocapitalize="none" required autofocus;
+                label { "Password" } input type="password" name="password" autocomplete="current-password" required;
                 br; br; button.primary type="submit" { "Log in" }
             } }
         } } }
     }
 }
 
-/// Change the dashboard password. `msg` is the outcome of a change: Ok(info) or Err(problem).
-pub fn account(changeable: bool, msg: Option<Result<&str, &str>>) -> Markup {
-    layout("Account", html! {
+fn outcome(msg: Option<Result<&str, &str>>) -> Markup {
+    html! {
+        @match msg {
+            Some(Ok(m)) => { p { b { (m) } } }
+            Some(Err(e)) => { .error { (e) } }
+            None => {}
+        }
+    }
+}
+
+/// Days since 1970-01-01 as `YYYY-MM-DD` (Howard Hinnant's civil_from_days).
+fn date(unix: u64) -> String {
+    let z = (unix / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn current_password_field() -> Markup {
+    html! { label { "Your current password" } input type="password" name="current" autocomplete="current-password" required; }
+}
+
+/// The caller's own account: password and API tokens. `msg` is the outcome of the last action,
+/// `new_token` a token just created (shown once).
+pub fn account(st: &AppState, me: &Identity, msg: Option<Result<&str, &str>>, new_token: Option<&str>) -> Markup {
+    let editable = st.users.editable();
+    let tokens = st.users.snapshot().get(&me.name).map(|u| u.tokens.clone()).unwrap_or_default();
+    let min = crate::handlers::MIN_PASSWORD_LEN;
+    layout("Account", Some(me), html! {
         h1 { "Account" }
-        .card style="max-width:420px" {
-            h2 { "Change password" }
-            @match msg {
-                Some(Ok(m)) => { p { b { (m) } } }
-                Some(Err(e)) => { .error { (e) } }
-                None => {}
+        p.muted { "Logged in as " b { (me.name) } " (" (me.role.as_str()) ")." }
+        (outcome(msg))
+        @if let Some(t) = new_token {
+            .card { h2 style="margin-top:0" { "New API token" }
+                pre.mono style="white-space:pre-wrap;word-break:break-all" { (t) }
+                p.muted { small { "Use it as " code { "Authorization: Bearer <token>" } ". It acts as you, with your role." } }
             }
-            @if changeable {
-                form method="post" action="/account/password" {
-                    label { "Current password" } input type="password" name="current" autocomplete="current-password" required;
-                    label { "New password (at least " (crate::handlers::MIN_PASSWORD_LEN) " characters)" }
-                    input type="password" name="new" autocomplete="new-password" minlength=(crate::handlers::MIN_PASSWORD_LEN) required;
-                    label { "Repeat new password" }
-                    input type="password" name="confirm" autocomplete="new-password" minlength=(crate::handlers::MIN_PASSWORD_LEN) required;
-                    br; br; button.primary type="submit" { "Change password" }
+        }
+        .grid {
+            .card {
+                h2 style="margin-top:0" { "Change password" }
+                @if editable {
+                    form method="post" action="/account/password" {
+                        label { "Current password" } input type="password" name="current" autocomplete="current-password" required;
+                        label { "New password (at least " (min) " characters)" }
+                        input type="password" name="new" autocomplete="new-password" minlength=(min) required;
+                        label { "Repeat new password" }
+                        input type="password" name="confirm" autocomplete="new-password" minlength=(min) required;
+                        br; br; button.primary type="submit" { "Change password" }
+                    }
+                    p.muted { small { "Your other sessions are logged out. API tokens keep working." } }
+                } @else {
+                    p.muted { "Changing passwords here is turned off (" code { "dashboard.manageUsers: false" } "): the "
+                        code { "admin" } " password comes from " code { "dashboard.password" } " or " code { "dashboard.existingSecret" } "." }
                 }
-                p.muted { small { "Other sessions are logged out. If you set " code { "dashboard.password" } " in your Helm values, "
-                    "the next " code { "helm upgrade" } " puts that value back." } }
-            } @else {
-                p.muted { "Changing the password here is turned off. Set " code { "dashboard.password" }
-                    " in the Helm values, or change it in the Secret set as " code { "dashboard.existingSecret" } "." }
             }
+            .card {
+                h2 style="margin-top:0" { "API tokens" }
+                @if tokens.is_empty() { p.muted { "No tokens." } } @else {
+                    table { tbody { @for t in &tokens { tr {
+                        td { b { (t.name) } br; small.muted { "created " (date(t.created)) } }
+                        td { form method="post" action=(format!("/account/tokens/{}/revoke", t.id)) onsubmit="return confirm('Revoke this token?')" { button.danger { "Revoke" } } }
+                    } } } }
+                }
+                @if editable {
+                    form method="post" action="/account/tokens" {
+                        label { "Token name" } input name="name" maxlength="64" placeholder="status page" required;
+                        (current_password_field())
+                        br; br; button type="submit" { "Create token" }
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Admin page: everyone's role, add and remove users, reset passwords.
+pub fn users(st: &AppState, me: &Identity, msg: Option<Result<&str, &str>>) -> Markup {
+    let store = st.users.snapshot();
+    let editable = st.users.editable();
+    let min = crate::handlers::MIN_PASSWORD_LEN;
+    let role_select = |current: Role| html! {
+        select name="role" style="width:auto" { @for r in Role::ALL { option value=(r.as_str()) selected[r == current] { (r.as_str()) } } }
+    };
+    layout("Users", Some(me), html! {
+        h1 { "Users" }
+        (outcome(msg))
+        @if !editable {
+            p.muted { "Users can't be changed here (" code { "dashboard.manageUsers: false" } ")." }
+        }
+        .card {
+            table {
+                thead { tr { th { "Name" } th { "Role" } th { "API tokens" } th {} } }
+                tbody { @for u in &store.users { tr {
+                    td { b { (u.name) } @if u.name == me.name { " " span.muted { "(you)" } } }
+                    td { @if editable {
+                        form.row method="post" action=(format!("/users/{}/role", u.name)) { (role_select(u.role)) button { "Set" } }
+                    } @else { (u.role.as_str()) } }
+                    td { (u.tokens.len()) }
+                    td { @if editable { .row {
+                        @if u.name != me.name {
+                            details { summary { "Reset password" }
+                                form method="post" action=(format!("/users/{}/password", u.name)) {
+                                    label { "New password for " (u.name) } input type="password" name="password" autocomplete="new-password" minlength=(min) required;
+                                    (current_password_field())
+                                    br; br; button { "Set password" }
+                                    p.muted { small { "Logs them out and revokes their API tokens." } }
+                                }
+                            }
+                        }
+                        form method="post" action=(format!("/users/{}/delete", u.name)) onsubmit="return confirm('Remove this user?')" { button.danger { "Remove" } }
+                    } } }
+                } } }
+            }
+            p.muted { small { "viewer: read only · operator: also start, stop, restart and console · admin: everything, including users. "
+                "There is always at least one admin." } }
+        }
+        @if editable {
+            h2 { "Add a user" }
+            .card style="max-width:420px" { form method="post" action="/users" {
+                label { "User name" } input name="name" required pattern="[a-z0-9][a-z0-9._\\-]{0,31}" autocapitalize="none" autocomplete="off";
+                label { "Role" } (role_select(Role::Viewer))
+                label { "Password (at least " (min) " characters)" } input type="password" name="password" autocomplete="new-password" minlength=(min) required;
+                (current_password_field())
+                br; br; button.primary type="submit" { "Add user" }
+            } }
         }
     })
 }
@@ -114,10 +228,12 @@ pub fn address(st: &AppState, s: &MinecraftServer) -> Option<String> {
     Some(if st.cfg.public_minecraft_port == 25565 { host } else { format!("{host}:{}", st.cfg.public_minecraft_port) })
 }
 
-pub fn server_rows(st: &AppState, servers: &[MinecraftServer]) -> Markup {
+pub fn server_rows(st: &AppState, me: &Identity, servers: &[MinecraftServer]) -> Markup {
+    let operator = me.can(Role::Operator);
     html! {
         @if servers.is_empty() {
-            tr { td colspan="6" .muted { "No servers yet. " a href="/new" { "Create one" } " — or paste a compose file." } }
+            tr { td colspan="6" .muted { "No servers yet."
+                @if me.can(Role::Admin) { " " a href="/new" { "Create one" } " — or paste a compose file." } } }
         }
         @for s in servers {
             @let ns = s.namespace().unwrap_or_default();
@@ -134,28 +250,29 @@ pub fn server_rows(st: &AppState, servers: &[MinecraftServer]) -> Markup {
                 }
                 td { @if let Some(p) = &status.players { (p.online) "/" (p.max) } @else { span.muted { "–" } } }
                 td.mono { @if let Some(a) = address(st, s) { (a) } @else { span.muted { "set a hostname" } } }
-                td { .row {
+                td { @if operator { .row {
                     @if s.spec.paused || status.sleeping {
                         form method="post" action=(format!("{link}/action/start")) { button { "Start" } }
                     } @else {
                         form method="post" action=(format!("{link}/action/stop")) { button { "Stop" } }
                     }
-                } }
+                } } }
             }
         }
     }
 }
 
-pub fn index(st: &AppState, servers: &[MinecraftServer], remote: &[Summary], sources: &[SourceStatus]) -> Markup {
-    layout("Servers", html! {
+pub fn index(st: &AppState, me: &Identity, servers: &[MinecraftServer], remote: &[Summary], sources: &[SourceStatus]) -> Markup {
+    layout("Servers", Some(me), html! {
         .row style="justify-content:space-between" {
             h1 { "Servers" }
-            .row { a.btn href="/compose/export" { "Export compose" } a.btn href="/new#compose" { "Import compose" } a.btn href="/new" { "+ New server" } }
+            .row { a.btn href="/compose/export" { "Export compose" }
+                @if me.can(Role::Admin) { a.btn href="/new#compose" { "Import compose" } a.btn href="/new" { "+ New server" } } }
         }
         .card {
             table {
                 thead { tr { th { "Name" } th { "Status" } th { "Version" } th { "Players" } th { "Address" } th {} } }
-                tbody #rows data-refresh=(site::get().refresh_seconds) { (server_rows(st, servers)) }
+                tbody #rows data-refresh=(site::get().refresh_seconds) { (server_rows(st, me, servers)) }
             }
         }
         @for src in sources.iter() {
@@ -183,10 +300,10 @@ pub fn index(st: &AppState, servers: &[MinecraftServer], remote: &[Summary], sou
     })
 }
 
-pub fn new_server(st: &AppState, curseforge: bool) -> Markup {
+pub fn new_server(st: &AppState, me: &Identity, curseforge: bool) -> Markup {
     let suffix = st.cfg.base_domain.clone();
     let form = &site::get().new_server;
-    layout("New server", html! {
+    layout("New server", Some(me), html! {
         h1 { "New server" }
         .tabs { button.on data-tab="compose" { "Compose file" } button data-tab="quick" { "Quick create" } }
         .card #tab-compose {
@@ -263,14 +380,14 @@ pub fn new_server(st: &AppState, curseforge: bool) -> Markup {
     })
 }
 
-pub fn compose_preview(st: &AppState, input: &str, rehost: bool, out: &ComposeOutput, yaml: &str, err: Option<&str>) -> Markup {
+pub fn compose_preview(st: &AppState, me: &Identity, input: &str, rehost: bool, out: &ComposeOutput, yaml: &str, err: Option<&str>) -> Markup {
     let suffix = st.cfg.base_domain.clone();
     let rehost_box = html! {
         @if !suffix.is_empty() {
             label.check { input type="checkbox" name="rehost" checked[rehost]; "Give imported servers " code { "<name>." (suffix) } }
         }
     };
-    layout("Compose preview", html! {
+    layout("Compose preview", Some(me), html! {
         h1 { "Compose preview" }
         @if let Some(e) = err { .card.error { pre.mono { (e) } } }
         @if !out.servers.is_empty() {
@@ -318,25 +435,29 @@ pub fn compose_preview(st: &AppState, input: &str, rehost: bool, out: &ComposeOu
     })
 }
 
-pub fn server_detail(st: &AppState, s: &MinecraftServer, spec_yaml: &str) -> Markup {
+pub fn server_detail(st: &AppState, me: &Identity, s: &MinecraftServer, spec_yaml: &str) -> Markup {
+    let (operator, admin) = (me.can(Role::Operator), me.can(Role::Admin));
     let ns = s.namespace().unwrap_or_default();
     let name = s.name_any();
     let base = format!("/servers/{ns}/{name}");
     let status = s.status.clone().unwrap_or_default();
     let host = st.public_host().unwrap_or("<gateway address>").to_string();
-    layout(&name, html! {
+    layout(&name, Some(me), html! {
         .row style="justify-content:space-between" {
             h1 { (name) " " (phase_badge(status.phase)) }
             .row {
-                @if s.spec.paused || status.sleeping {
+                @if !operator {}
+                @else if s.spec.paused || status.sleeping {
                     form method="post" action=(format!("{base}/action/start")) { button.primary { "Start" } }
                 } @else {
                     form method="post" action=(format!("{base}/action/stop")) { button { "Stop" } }
                     form method="post" action=(format!("{base}/action/restart")) { button { "Restart" } }
                 }
                 a.btn href=(format!("{base}/compose.yaml")) { "Compose file" }
-                form method="post" action=(format!("{base}/action/delete")) onsubmit="return confirm('Delete this server? The world data volume is kept.')" { button.danger { "Delete" } }
-                form method="post" action=(format!("{base}/action/delete-data")) onsubmit="return confirm('Delete this server AND its world data? This cannot be undone.')" { button.danger { "Delete + data" } }
+                @if admin {
+                    form method="post" action=(format!("{base}/action/delete")) onsubmit="return confirm('Delete this server? The world data volume is kept.')" { button.danger { "Delete" } }
+                    form method="post" action=(format!("{base}/action/delete-data")) onsubmit="return confirm('Delete this server AND its world data? This cannot be undone.')" { button.danger { "Delete + data" } }
+                }
             }
         }
         @if let Some(m) = &status.message { p.muted { (m) } }
@@ -373,16 +494,22 @@ pub fn server_detail(st: &AppState, s: &MinecraftServer, spec_yaml: &str) -> Mar
                 span.muted #logstate {}
             }
             pre #log data-base=(base) data-initial=(if status.phase == Phase::Installing { "install" } else { "server" }) data-max-lines=(site::get().console.max_lines) {}
-            form #console .row style="margin-top:8px" {
-                input name="command" #cmd placeholder="say hello  (runs over RCON)" autocomplete="off" style="flex:1";
-                button.primary type="submit" { "Send" }
+            @if operator {
+                form #console .row style="margin-top:8px" {
+                    input name="command" #cmd placeholder="say hello  (runs over RCON)" autocomplete="off" style="flex:1";
+                    button.primary type="submit" { "Send" }
+                }
             }
         }
         h2 { "Spec" }
-        .card { form method="post" action=(format!("{base}/spec")) {
-            textarea name="spec" spellcheck="false" { (spec_yaml) }
-            br; button.primary type="submit" { "Save & apply" }
-        } }
+        @if admin {
+            .card { form method="post" action=(format!("{base}/spec")) {
+                textarea name="spec" spellcheck="false" { (spec_yaml) }
+                br; button.primary type="submit" { "Save & apply" }
+            } }
+        } @else {
+            .card { pre.mono style="overflow:auto" { (spec_yaml) } }
+        }
         script { (PreEscaped(site::SERVER_JS)) }
     })
 }
@@ -391,9 +518,17 @@ pub fn server_detail(st: &AppState, s: &MinecraftServer, spec_yaml: &str) -> Mar
 mod tests {
     #[test]
     fn login_uses_site_branding_and_stylesheet() {
-        let page = super::login(Some("Wrong password")).into_string();
+        let page = super::login(Some("Wrong user name or password")).into_string();
         assert!(page.contains("<title>Log in · cubeharbor</title>"));
         assert!(page.contains("--accent:#5bbd72"));
         assert!(page.contains("<span>⛏</span><span>cubeharbor</span>"));
+        assert!(page.contains(r#"name="username""#));
+    }
+
+    #[test]
+    fn dates() {
+        assert_eq!(super::date(0), "1970-01-01");
+        assert_eq!(super::date(951_782_400), "2000-02-29");
+        assert_eq!(super::date(1_793_923_200), "2026-11-06");
     }
 }

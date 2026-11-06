@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 
 use axum::Json;
-use axum::extract::{ConnectInfo, Form, Path, Query};
+use axum::extract::{ConnectInfo, Extension, Form, Path, Query};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -22,6 +22,7 @@ use kube::ResourceExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::users::{Identity, Role};
 use crate::{COOKIE, St, site, views};
 
 pub struct AppError(anyhow::Error);
@@ -63,6 +64,8 @@ pub async fn login_page() -> Response {
 
 #[derive(Deserialize)]
 pub struct LoginForm {
+    #[serde(default)]
+    username: String,
     password: String,
 }
 
@@ -77,10 +80,12 @@ pub async fn login(
     if st.throttled(client) {
         return (StatusCode::TOO_MANY_REQUESTS, html(views::login(Some("Too many failed attempts, try again in a minute")))).into_response();
     }
-    if !st.password_ok(&f.password, client) {
-        return (StatusCode::UNAUTHORIZED, html(views::login(Some("Wrong password")))).into_response();
+    let user = f.username.trim().to_lowercase();
+    if st.check_login(&user, &f.password, client).await.is_none() {
+        return (StatusCode::UNAUTHORIZED, html(views::login(Some("Wrong user name or password")))).into_response();
     }
-    let token = match st.new_session() {
+    tracing::info!("{user} logged in from {client}");
+    let token = match st.users.new_session(&user) {
         Ok(t) => t,
         Err(e) => return AppError::from(e).into_response(),
     };
@@ -93,7 +98,7 @@ pub async fn login(
 
 pub async fn logout(st: St, jar: CookieJar) -> Response {
     if let Some(c) = jar.get(COOKIE) {
-        st.end_session(c.value());
+        st.users.end_session(c.value());
     }
     (jar.remove(Cookie::build(COOKIE).path("/")), Redirect::to("/login")).into_response()
 }
@@ -102,19 +107,19 @@ pub async fn logout(st: St, jar: CookieJar) -> Response {
 // Pages
 // ---------------------------------------------------------------------------
 
-pub async fn index(st: St) -> R {
+pub async fn index(st: St, Extension(me): Extension<Identity>) -> R {
     let servers = list_servers(&st).await?;
     let (remote, sources) = crate::api::remote_servers(&st).await;
-    Ok(html(views::index(&st, &servers, &remote, &sources)))
+    Ok(html(views::index(&st, &me, &servers, &remote, &sources)))
 }
 
-pub async fn servers_fragment(st: St) -> R {
+pub async fn servers_fragment(st: St, Extension(me): Extension<Identity>) -> R {
     let servers = list_servers(&st).await?;
-    Ok(html(views::server_rows(&st, &servers)))
+    Ok(html(views::server_rows(&st, &me, &servers)))
 }
 
-pub async fn new_page(st: St) -> Response {
-    html(views::new_server(&st, st.cfg.curseforge_api_key.is_some()))
+pub async fn new_page(st: St, Extension(me): Extension<Identity>) -> Response {
+    html(views::new_server(&st, &me, st.cfg.curseforge_api_key.is_some()))
 }
 
 #[derive(Deserialize)]
@@ -212,14 +217,14 @@ fn parse_form(st: &St, f: &ComposeForm) -> anyhow::Result<ComposeOutput> {
     Ok(out)
 }
 
-pub async fn compose_preview(st: St, Form(f): Form<ComposeForm>) -> Response {
+pub async fn compose_preview(st: St, Extension(me): Extension<Identity>, Form(f): Form<ComposeForm>) -> Response {
     let rehost = f.rehost.is_some();
     match parse_form(&st, &f) {
         Ok(out) => {
             let yaml = out.to_yaml(Some(&st.cfg.default_namespace)).unwrap_or_else(|e| e.to_string());
-            html(views::compose_preview(&st, &f.compose, rehost, &out, &yaml, None))
+            html(views::compose_preview(&st, &me, &f.compose, rehost, &out, &yaml, None))
         }
-        Err(e) => html(views::compose_preview(&st, &f.compose, rehost, &ComposeOutput::default(), "", Some(&format!("{e:#}")))),
+        Err(e) => html(views::compose_preview(&st, &me, &f.compose, rehost, &ComposeOutput::default(), "", Some(&format!("{e:#}")))),
     }
 }
 
@@ -244,13 +249,13 @@ pub async fn apply(st: &St, out: &ComposeOutput) -> anyhow::Result<Vec<String>> 
     Ok(done)
 }
 
-pub async fn server_page(st: St, Path((ns, name)): Path<(String, String)>) -> R {
+pub async fn server_page(st: St, Extension(me): Extension<Identity>, Path((ns, name)): Path<(String, String)>) -> R {
     let api: Api<MinecraftServer> = Api::namespaced(st.client.clone(), &ns);
     let mcs = api.get(&name).await?;
     let mut spec = serde_json::to_value(&mcs.spec)?;
     prune_nulls(&mut spec);
     let spec_yaml = serde_norway::to_string(&spec)?;
-    Ok(html(views::server_detail(&st, &mcs, &spec_yaml)))
+    Ok(html(views::server_detail(&st, &me, &mcs, &spec_yaml)))
 }
 
 fn prune_nulls(v: &mut Value) {
@@ -447,8 +452,8 @@ pub async fn api_search(st: St, Query(q): Query<SearchQuery>) -> R {
 /// Shortest password the dashboard accepts when it's changed from the UI.
 pub const MIN_PASSWORD_LEN: usize = 12;
 
-pub async fn account_page(st: St) -> Response {
-    html(views::account(st.password_changeable(), None))
+pub async fn account_page(st: St, Extension(me): Extension<Identity>) -> Response {
+    html(views::account(&st, &me, None, None))
 }
 
 #[derive(Deserialize)]
@@ -472,40 +477,204 @@ fn check_new_password(current: &str, new: &str, confirm: &str) -> Result<(), Str
     Ok(())
 }
 
+/// Re-check the caller's own password before changing credentials, like a login (with the
+/// failed-attempt limits), so a stolen session can't be turned into a password, a token or a
+/// new admin.
+async fn confirm_own_password(st: &St, me: &Identity, pw: &str, peer: SocketAddr, headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {
+    let client = st.client_ip(Some(peer.ip()), headers);
+    if st.throttled(client) {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "Too many failed attempts, try again in a minute."));
+    }
+    if st.check_login(&me.name, pw, client).await.is_none() {
+        return Err((StatusCode::UNAUTHORIZED, "Your current password is wrong."));
+    }
+    Ok(())
+}
+
 pub async fn change_password(
     st: St,
+    Extension(me): Extension<Identity>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    jar: CookieJar,
     headers: HeaderMap,
     Form(f): Form<PasswordForm>,
 ) -> Response {
-    let page = |status: StatusCode, msg: Result<&str, &str>| (status, html(views::account(st.password_changeable(), Some(msg)))).into_response();
-    if !st.password_changeable() {
-        return page(StatusCode::BAD_REQUEST, Err("Changing the password here is turned off; set it in the Helm values instead."));
+    let page = |status: StatusCode, msg: Result<&str, &str>| (status, html(views::account(&st, &me, Some(msg), None))).into_response();
+    if !st.users.editable() {
+        return page(StatusCode::BAD_REQUEST, Err("Changing passwords here is turned off (dashboard.manageUsers)."));
     }
-    // The current password is checked like a login, including the failed-attempt limits, so a
-    // stolen session can't be turned into the password.
-    let client = st.client_ip(Some(peer.ip()), &headers);
-    if st.throttled(client) {
-        return page(StatusCode::TOO_MANY_REQUESTS, Err("Too many failed attempts, try again in a minute."));
-    }
-    if !st.password_ok(&f.current, client) {
-        return page(StatusCode::UNAUTHORIZED, Err("The current password is wrong."));
+    if let Err((code, e)) = confirm_own_password(&st, &me, &f.current, peer, &headers).await {
+        return page(code, Err(e));
     }
     if let Err(e) = check_new_password(&f.current, &f.new, &f.confirm) {
         return page(StatusCode::BAD_REQUEST, Err(&e));
     }
-    // Write it to the Secret first, so a restart can't bring back the old password.
-    let secrets: Api<Secret> = Api::namespaced(st.client.clone(), &st.cfg.pod_namespace);
-    let patch = json!({ "data": { "password": k8s_openapi::ByteString(f.new.clone().into_bytes()) } });
-    if let Err(e) = secrets.patch(&st.cfg.password_secret, &PatchParams::default(), &Patch::Merge(&patch)).await {
-        tracing::warn!("could not store the new dashboard password: {e}");
+    let saved = async {
+        let hash = st.users.hash(&f.new).await?;
+        st.users.update(|s| { s.get_mut(&me.name)?.password = hash; Ok(()) }).await
+    };
+    if let Err(e) = saved.await {
+        tracing::warn!("could not change the password of {}: {e:#}", me.name);
         return page(StatusCode::BAD_GATEWAY, Err("Could not save the new password (see the dashboard logs). Nothing was changed."));
     }
-    // Keeps only the caller's session. With Bearer auth there is no cookie, so every session ends.
-    st.set_password(&f.new, jar.get(COOKIE).map(|c| c.value()));
-    tracing::info!("dashboard password changed from {client}; other sessions logged out");
-    page(StatusCode::OK, Ok("Password changed. Other sessions have been logged out."))
+    // Keeps only the caller's session. With a token there is no cookie, so every session ends.
+    st.users.end_sessions_of(&me.name, me.session.as_deref());
+    tracing::info!("{} changed their password; their other sessions were logged out", me.name);
+    page(StatusCode::OK, Ok("Password changed. Your other sessions have been logged out."))
+}
+
+#[derive(Deserialize)]
+pub struct TokenForm {
+    name: String,
+    current: String,
+}
+
+pub async fn create_token(
+    st: St,
+    Extension(me): Extension<Identity>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Form(f): Form<TokenForm>,
+) -> Response {
+    let page = |status: StatusCode, msg: Result<&str, &str>, token: Option<&str>| (status, html(views::account(&st, &me, Some(msg), token))).into_response();
+    if let Err((code, e)) = confirm_own_password(&st, &me, &f.current, peer, &headers).await {
+        return page(code, Err(e), None);
+    }
+    match st.users.create_token(&me.name, &f.name).await {
+        Ok(token) => {
+            tracing::info!("{} created API token {:?}", me.name, f.name.trim());
+            page(StatusCode::OK, Ok("Token created. Copy it now: it is not shown again."), Some(&token))
+        }
+        Err(e) => page(StatusCode::BAD_REQUEST, Err(&format!("{e:#}")), None),
+    }
+}
+
+pub async fn revoke_token(st: St, Extension(me): Extension<Identity>, Path(id): Path<String>) -> Response {
+    let msg = st.users.revoke_token(&me.name, &id).await.map(|_| "Token revoked.").map_err(|e| format!("{e:#}"));
+    let status = if msg.is_ok() { StatusCode::OK } else { StatusCode::BAD_REQUEST };
+    (status, html(views::account(&st, &me, Some(msg.as_deref().map_err(String::as_str)), None))).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Users (admin only, enforced by `users::required_role`)
+// ---------------------------------------------------------------------------
+
+fn users_page_with(st: &St, me: &Identity, status: StatusCode, msg: Result<&str, &str>) -> Response {
+    (status, html(views::users(st, me, Some(msg)))).into_response()
+}
+
+pub async fn users_page(st: St, Extension(me): Extension<Identity>) -> Response {
+    html(views::users(&st, &me, None))
+}
+
+#[derive(Deserialize)]
+pub struct AddUserForm {
+    name: String,
+    role: String,
+    password: String,
+    current: String,
+}
+
+pub async fn add_user(
+    st: St,
+    Extension(me): Extension<Identity>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Form(f): Form<AddUserForm>,
+) -> Response {
+    if let Err((code, e)) = confirm_own_password(&st, &me, &f.current, peer, &headers).await {
+        return users_page_with(&st, &me, code, Err(e));
+    }
+    let name = f.name.trim().to_lowercase();
+    let added = async {
+        let role = Role::parse(&f.role).ok_or_else(|| anyhow::anyhow!("Unknown role {}.", f.role))?;
+        check_new_password("", &f.password, &f.password).map_err(anyhow::Error::msg)?;
+        crate::users::check_name(&name)?;
+        let hash = st.users.hash(&f.password).await?;
+        st.users.update(|s| s.add(&name, role, hash)).await?;
+        tracing::info!("{} added user {name} ({})", me.name, role.as_str());
+        anyhow::Ok(())
+    };
+    match added.await {
+        Ok(()) => users_page_with(&st, &me, StatusCode::OK, Ok(&format!("Added {name}. Give them their password; they can change it on their Account page."))),
+        Err(e) => users_page_with(&st, &me, StatusCode::BAD_REQUEST, Err(&format!("{e:#}"))),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RoleForm {
+    role: String,
+}
+
+pub async fn set_role(st: St, Extension(me): Extension<Identity>, Path(name): Path<String>, Form(f): Form<RoleForm>) -> Response {
+    let changed = async {
+        let role = Role::parse(&f.role).ok_or_else(|| anyhow::anyhow!("Unknown role {}.", f.role))?;
+        st.users.update(|s| { s.get_mut(&name)?.role = role; Ok(()) }).await?;
+        tracing::info!("{} made {name} {}", me.name, role.as_str());
+        anyhow::Ok(role)
+    };
+    match changed.await {
+        // Demoting yourself: the users page is no longer yours to see.
+        Ok(_) if name == me.name && st.users.role_of(&me.name) != Some(Role::Admin) => Redirect::to("/account").into_response(),
+        Ok(role) => users_page_with(&st, &me, StatusCode::OK, Ok(&format!("{name} is now {}.", role.as_str()))),
+        Err(e) => users_page_with(&st, &me, StatusCode::BAD_REQUEST, Err(&format!("{e:#}"))),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ResetForm {
+    password: String,
+    current: String,
+}
+
+/// Set someone else's password. Ends all their sessions and revokes their API tokens, since a
+/// reset usually means the account can't be trusted any more.
+pub async fn reset_password(
+    st: St,
+    Extension(me): Extension<Identity>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Form(f): Form<ResetForm>,
+) -> Response {
+    if name == me.name {
+        return users_page_with(&st, &me, StatusCode::BAD_REQUEST, Err("Change your own password on the Account page."));
+    }
+    if let Err((code, e)) = confirm_own_password(&st, &me, &f.current, peer, &headers).await {
+        return users_page_with(&st, &me, code, Err(e));
+    }
+    let reset = async {
+        check_new_password("", &f.password, &f.password).map_err(anyhow::Error::msg)?;
+        let hash = st.users.hash(&f.password).await?;
+        st.users.update(|s| {
+            let u = s.get_mut(&name)?;
+            u.password = hash;
+            u.tokens.clear();
+            Ok(())
+        })
+        .await
+    };
+    match reset.await {
+        Ok(()) => {
+            st.users.end_sessions_of(&name, None);
+            tracing::info!("{} reset the password of {name}; their sessions and tokens were revoked", me.name);
+            users_page_with(&st, &me, StatusCode::OK, Ok(&format!("New password set for {name}. Their sessions and API tokens were revoked.")))
+        }
+        Err(e) => users_page_with(&st, &me, StatusCode::BAD_REQUEST, Err(&format!("{e:#}"))),
+    }
+}
+
+pub async fn remove_user(st: St, Extension(me): Extension<Identity>, Path(name): Path<String>) -> Response {
+    match st.users.update(|s| s.remove(&name)).await {
+        Ok(()) => {
+            st.users.end_sessions_of(&name, None);
+            tracing::info!("{} removed user {name}", me.name);
+            if name == me.name {
+                return Redirect::to("/login").into_response();
+            }
+            users_page_with(&st, &me, StatusCode::OK, Ok(&format!("Removed {name}.")))
+        }
+        Err(e) => users_page_with(&st, &me, StatusCode::BAD_REQUEST, Err(&format!("{e:#}"))),
+    }
 }
 
 #[cfg(test)]
