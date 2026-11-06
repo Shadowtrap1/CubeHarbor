@@ -108,7 +108,7 @@ The dashboard has named users, each with their own password and one role:
 
 | Role | Can |
 |---|---|
-| `viewer` | See servers, their logs, spec and compose files; manage their own password and API tokens |
+| `viewer` | See servers, their logs, spec and compose files (including `env` values: don't put secrets there if viewers shouldn't read them); manage their own password and API tokens |
 | `operator` | Also start, stop and restart servers and use the RCON console |
 | `admin` | Everything: create, edit and delete servers, import compose files, manage users |
 

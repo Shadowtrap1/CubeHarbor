@@ -8,6 +8,9 @@
 //!
 //! Sessions are random tokens kept in memory and mapped to a user name, so a role change takes
 //! effect on the next request and removing a user ends their sessions and tokens.
+//!
+//! This assumes one dashboard replica (the chart runs one): sessions and the loaded store live in
+//! this process, and saves overwrite `users.json` without checking for changes by another pod.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
