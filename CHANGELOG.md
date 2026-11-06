@@ -24,6 +24,10 @@ All notable changes are listed here. The format follows
   is reserved (servers can't claim it with `expose: ingress`, and DDNS never manages it). The README covers the Cloudflare setup, Cloudflare
   Access, and setting `dashboard.trustedProxies` to the pod CIDR so failed logins are limited per
   visitor. Player traffic does not use the tunnel. See `examples/values-cloudflare-tunnel.yaml`.
+* Chart: `dashboard.networkPolicy` admits only cloudflared and `allowFrom` (e.g. the ingress
+  controller) to the dashboard. It's on by default with `cloudflareTunnel`, so other pods
+  (including Minecraft servers running third-party plugins) can't forge `X-Forwarded-For` from
+  inside `dashboard.trustedProxies` to dodge the per-client login limit.
 * Dashboard: an **Account** page to change the login password (current password required,
   at least 12 characters). It's saved to the dashboard's Secret and logs out other sessions
   (`dashboard.allowPasswordChange`, on by default; off with `existingSecret`). The README now
