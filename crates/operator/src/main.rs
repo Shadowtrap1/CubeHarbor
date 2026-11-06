@@ -1,6 +1,7 @@
 //! cubeharbor-operator: reconciles `MinecraftServer` resources into running servers.
 
 mod config;
+mod dns;
 mod ports;
 mod reconcile;
 mod resources;
@@ -54,6 +55,15 @@ async fn main() -> Result<()> {
     });
 
     tokio::spawn(wake::run(client.clone(), cfg.clone()));
+
+    match dns::Settings::from_config(&cfg) {
+        Ok(Some(settings)) => {
+            tokio::spawn(dns::run(client.clone(), settings, cfg.watch_namespace.clone()));
+        }
+        Ok(None) => {}
+        // A settings mistake shouldn't take server management down with it.
+        Err(e) => tracing::error!("Cloudflare DNS updates are off: {e}"),
+    }
 
     let (servers, sts, svc, cm, sec) = if cfg.watch_namespace.is_empty() {
         (Api::<MinecraftServer>::all(client.clone()), Api::<StatefulSet>::all(client.clone()), Api::<Service>::all(client.clone()), Api::<ConfigMap>::all(client.clone()), Api::<Secret>::all(client.clone()))

@@ -63,7 +63,7 @@ them yourself or with AI help, as long as you've tested them.
 | Crate | Binary / image | Role |
 |---|---|---|
 | `crates/core` | – | CRD types, compose parser, Minecraft protocol (handshake, SLP, PROXY v2), RCON, Mojang/Modrinth/CurseForge clients, version resolution |
-| `crates/operator` | `cubeharbor-operator` | Reconciles `MinecraftServer` → Secret, ConfigMap (install plan), Service, StatefulSet, Ingress. Port allocation, status, player polling, auto-sleep, gateway port Service |
+| `crates/operator` | `cubeharbor-operator` | Reconciles `MinecraftServer` → Secret, ConfigMap (install plan), Service, StatefulSet, Ingress. Port allocation, status, player polling, auto-sleep, gateway port Service, optional Cloudflare DNS updates |
 | `crates/gateway` | `cubeharbor-gateway` | Hostname routing on 25565 (Forge/FML suffixes handled), offline/sleeping status replies, wake-on-join, dynamic TCP/UDP forwarders |
 | `crates/dashboard` | `cubeharbor-dashboard` | Server-rendered UI (axum + maud): list/start/stop/restart/delete, quick create with modpack search, compose preview/apply, live logs (SSE), RCON console, spec editor, JSON API |
 | `crates/installer` | in `cubeharbor-server` | Init container: installs vanilla/Paper/Purpur/Fabric/Quilt/Forge/NeoForge, Modrinth `.mrpack`, CurseForge packs (server pack or manifest), extra mods with dependency resolution, writes configs |
@@ -89,6 +89,7 @@ helm install cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor --version 0.
   --set curseforge.apiKey=$CF_API_KEY            # optional, for CurseForge packs
 
 # 2. Point a wildcard DNS record *.mc.example.com at the gateway's external IP
+#    (or let cubeharbor keep it updated on Cloudflare, see "DNS setup")
 kubectl -n cubeharbor get svc cubeharbor-gateway
 
 # 3. Open the dashboard and log in with the generated password
@@ -175,6 +176,67 @@ you created yourself and all world volumes stay (servers defined under `servers:
 values are part of the release and get deleted). Delete the servers with `kubectl delete mcs --all -A` (volumes
 `data-<name>-0` are still kept, remove them with `kubectl delete pvc` when you're sure). Then
 delete the CRD with `kubectl delete crd minecraftservers.cubeharbor.dev`.
+
+## DNS setup
+
+Players reach servers at `<name>.<baseDomain>`, so the zone needs a wildcard record
+`*.<baseDomain>` pointing at the address players connect to: the gateway Service's external IP
+(`kubectl -n cubeharbor get svc cubeharbor-gateway`) on a cloud cluster, or your router's public
+IP at home, with port 25565 (and `minecraft.portRange`, for voice chat and Bedrock) forwarded to
+the gateway. Servers with their own `routing.hostnames` need records for those names too.
+
+### Dynamic DNS with Cloudflare
+
+At home the ISP may change your public IP. If the zone is on Cloudflare, the operator can keep
+the records pointed at it. (external-dns doesn't fit here: it publishes the Service's address,
+which behind a home router is a LAN address.)
+
+```sh
+# A token from https://dash.cloudflare.com/profile/api-tokens with Zone > DNS > Edit on the zone
+# (the "Edit zone DNS" template)
+kubectl -n cubeharbor create secret generic cubeharbor-cloudflare-api --from-literal=apiToken=<token>
+
+helm upgrade cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor -n cubeharbor --reuse-values \
+  --set cloudflareDdns.enabled=true \
+  --set cloudflareDdns.existingSecret=cubeharbor-cloudflare-api \
+  --set cloudflareDdns.zone=example.com
+```
+
+* Every `cloudflareDdns.interval` (5 minutes by default) the operator asks a lookup service for
+  its public IPv4 (`cloudflareDdns.ipLookupUrls`: api.ipify.org, then ipv4.icanhazip.com). It
+  only calls Cloudflare when the address, or the set of names, changed since the last successful
+  update, after a restart, and once an hour (so a record deleted or switched to proxied in the
+  Cloudflare dashboard is repaired).
+* It manages `*.<baseDomain>` by default, or the names in `cloudflareDdns.records`. Add
+  `minecraft.publicHost` there if it's a separate name in the zone. With
+  `cloudflareDdns.serverHostnames: true`, servers' own hostnames inside the zone are published as
+  well (names the wildcard already covers are skipped).
+* A missing A record is created (with the comment `managed by cubeharbor`). A wrong one is updated,
+  and so is a proxied one: records are always "DNS only", because Cloudflare's proxy only carries
+  HTTP and can't forward Minecraft. Other records in the zone are never touched, and nothing is
+  deleted, including the records of deleted servers. If a name has other A records too, they're
+  left alone and a warning is logged, since players could be sent to them.
+* **Cloudflare Tunnel / CNAMEs.** A name that has a CNAME record (such as a Cloudflare Tunnel
+  hostname for the dashboard) is never changed: it's skipped with a warning, even if you list it
+  in `records`. The dashboard's own host (`dashboard.ingress.host`) is never managed either.
+  Don't list the tunnel hostname in `records` anyway, so the intent is clear. The default
+  wildcard `*.<baseDomain>` doesn't affect it: an existing record for a name takes precedence
+  over the wildcard.
+* Failures (lookup service down, Cloudflare errors, rate limits) are logged and retried after
+  15s, 30s, 60s, ... up to the interval. They never restart the operator. Bad settings (no token,
+  no zone) turn the feature off with an error in the operator log; the chart refuses to render
+  without `existingSecret` and `zone`.
+* **CGNAT.** If your ISP puts you behind carrier-grade NAT (your router's WAN address is in
+  100.64.0.0/10, or differs from what the lookup service reports), the public IP is shared with
+  other customers and port forwarding can't reach you. Updating DNS doesn't help then: ask the
+  ISP for a public IPv4, or use a tunnel/VPS relay for the game port.
+* Only IPv4 (A records). Home IPv6 prefixes change too, but a pod usually has no global IPv6
+  route to discover one with, so AAAA records are left alone.
+* The token is read from the Secret at startup (restart the operator after rotating it) and
+  never logged. It needs no new Kubernetes permissions, since the operator already reads
+  MinecraftServers. The operator needs outbound HTTPS to the lookup URLs and api.cloudflare.com.
+
+Look for `dns:` lines in `kubectl -n cubeharbor logs deploy/cubeharbor-operator` to see what it did.
 
 ## Compose files
 
@@ -413,6 +475,8 @@ every namespace the dashboard manages.
   port can't block logins; UDP sessions are capped per port (`MAX_UDP_SESSIONS`, default 4096).
   TCP connections with no traffic for `gateway.idleTimeoutSeconds` (default 600) are closed,
   which also cuts quiet WebSocket UIs on forwarded ports; raise it or set 0 if that matters.
+* **Cloudflare token.** With `cloudflareDdns.enabled`, only the operator gets the API token, from
+  your own Secret. Scope it to Zone > DNS > Edit on the one zone. Its value is never logged.
 * Operator, gateway and dashboard run as non-root with a read-only root filesystem on distroless images.
 
 ## Contributing

@@ -7,7 +7,13 @@ cubeharbor is installed.
 {{ if $mcr }}mc-router{{ else }}Gateway{{ end }} (Java players connect here, port {{ $port }}):
   kubectl -n {{ .Release.Namespace }} get svc {{ $fullname }}-{{ ternary "mc-router" "gateway" $mcr }}
 {{- if .Values.minecraft.baseDomain }}
+{{- if .Values.cloudflareDdns.enabled }}
+  Cloudflare DNS: the operator keeps {{ join ", " (.Values.cloudflareDdns.records | default (list (printf "*.%s" .Values.minecraft.baseDomain))) }} pointed at your public IPv4
+  (zone {{ .Values.cloudflareDdns.zone }}; see `kubectl -n {{ .Release.Namespace }} logs deploy/{{ $fullname }}-operator | grep dns:`).
+  Forward port {{ $port }} on your router to that address; servers answer on <name>.{{ .Values.minecraft.baseDomain }}{{ if ne $port 25565 }}:{{ $port }}{{ end }}.
+{{- else }}
   Point *.{{ .Values.minecraft.baseDomain }} at that address; servers answer on <name>.{{ .Values.minecraft.baseDomain }}{{ if ne $port 25565 }}:{{ $port }}{{ end }}.
+{{- end }}
 {{- if ne $port 25565 }}
   To drop the port, add an SRV record per server: _minecraft._tcp.<name>.{{ .Values.minecraft.baseDomain }} -> <name>.{{ .Values.minecraft.baseDomain }}:{{ $port }}.
 {{- end }}

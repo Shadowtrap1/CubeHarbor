@@ -122,6 +122,33 @@ pub struct Config {
     /// `ipFamilies` of the gateway ports Service, comma separated (`IPv4,IPv6`).
     #[arg(long, env = "GATEWAY_IP_FAMILIES", default_value = "")]
     pub gateway_ip_families: String,
+
+    /// Keep Cloudflare A records pointed at the cluster's public IPv4 address (see `dns.rs`).
+    #[arg(long, env = "CLOUDFLARE_DNS", default_value_t = false, action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
+    pub cloudflare_dns: bool,
+    /// Needs Zone > DNS > Edit on the zone.
+    #[arg(long, env = "CLOUDFLARE_API_TOKEN", hide_env_values = true)]
+    pub cloudflare_api_token: Option<crate::dns::ApiToken>,
+    /// Zone name (`example.com`) or zone ID.
+    #[arg(long, env = "CLOUDFLARE_ZONE", default_value = "")]
+    pub cloudflare_zone: String,
+    #[arg(long, env = "CLOUDFLARE_API_URL", default_value = crate::dns::DEFAULT_API_URL)]
+    pub cloudflare_api_url: String,
+    /// Record names to manage, comma separated. Defaults to `*.<base-domain>`.
+    #[arg(long, env = "DNS_RECORDS", default_value = "")]
+    pub dns_records: String,
+    /// Also publish servers' hostnames that fall inside the zone.
+    #[arg(long, env = "DNS_SERVER_HOSTNAMES", default_value_t = false, action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
+    pub dns_server_hostnames: bool,
+    /// How often the public IP is checked (`30s`, `5m`, `1h`).
+    #[arg(long, env = "DNS_INTERVAL", default_value = "5m")]
+    pub dns_interval: String,
+    /// TTL of records cubeharbor writes; 1 = Cloudflare's automatic TTL.
+    #[arg(long, env = "DNS_TTL", default_value_t = 1)]
+    pub dns_ttl: u32,
+    /// URLs that answer with the caller's public IPv4 as plain text, tried in order.
+    #[arg(long, env = "PUBLIC_IP_URLS", default_value = crate::dns::DEFAULT_IP_URLS)]
+    pub public_ip_urls: String,
 }
 
 /// Cluster-specific settings for server pods: private registries, dedicated or tainted game

@@ -144,6 +144,25 @@ spec:
             - { name: DASHBOARD_NAMESPACE, value: {{ .Release.Namespace | quote }} }
             - { name: DASHBOARD_SELECTOR, value: {{ printf "app.kubernetes.io/name=cubeharbor,app.kubernetes.io/instance=%s,app.kubernetes.io/component=dashboard" .Release.Name | quote }} }
             {{- include "cubeharbor.curseforgeEnv" . | nindent 12 }}
+            {{- with .Values.cloudflareDdns }}
+            {{- if .enabled }}
+            {{- if not .existingSecret }}{{ fail "cloudflareDdns.existingSecret is required: a Secret holding the Cloudflare API token" }}{{ end }}
+            {{- if not .zone }}{{ fail "cloudflareDdns.zone is required (zone name or ID)" }}{{ end }}
+            {{- if not (or .records $.Values.minecraft.baseDomain) }}{{ fail "cloudflareDdns.records is empty and minecraft.baseDomain is not set" }}{{ end }}
+            - { name: CLOUDFLARE_DNS, value: "true" }
+            - name: CLOUDFLARE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret | quote }}
+                  key: {{ .existingSecretKey | default "apiToken" | quote }}
+            - { name: CLOUDFLARE_ZONE, value: {{ .zone | quote }} }
+            - { name: DNS_RECORDS, value: {{ join "," (.records | default list) | quote }} }
+            - { name: DNS_SERVER_HOSTNAMES, value: {{ .serverHostnames | quote }} }
+            - { name: DNS_INTERVAL, value: {{ .interval | quote }} }
+            - { name: DNS_TTL, value: {{ .ttl | quote }} }
+            - { name: PUBLIC_IP_URLS, value: {{ join "," .ipLookupUrls | quote }} }
+            {{- end }}
+            {{- end }}
           ports:
             - { name: health, containerPort: 8080 }
           livenessProbe:
