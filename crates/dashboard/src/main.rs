@@ -1,6 +1,8 @@
 //! cubeharbor-dashboard: web UI and API for creating and operating servers.
 
 mod api;
+#[cfg(test)]
+mod e2e_tests;
 mod handlers;
 mod site;
 mod users;
@@ -334,20 +336,8 @@ fn bearer_hint(presented: &str) -> &'static str {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,kube=warn".into()))
-        .init();
-    let cfg = Config::parse();
-    site::install(site::Site::load(cfg.site_config.as_deref())?);
-    let client = Client::try_default().await?;
-    let backend = (!cfg.users_secret.is_empty()).then(|| {
-        let ns = if cfg.pod_namespace.is_empty() { client.default_namespace().to_string() } else { cfg.pod_namespace.clone() };
-        Backend { secrets: kube::Api::namespaced(client.clone(), &ns), name: cfg.users_secret.clone() }
-    });
-    let users = Users::load(backend, Some(&cfg.password)).await?;
-    let state = Arc::new(AppState {
+fn new_state(cfg: &Config, client: Client, users: Users) -> Result<AppState> {
+    Ok(AppState {
         client,
         http: Http::new(cfg.curseforge_api_key.clone())?,
         users,
@@ -357,10 +347,12 @@ async fn main() -> Result<()> {
         remote_cache: tokio::sync::Mutex::new(None),
         cors_origins: cfg.cors_origins.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(),
         cfg: cfg.clone(),
-    });
+    })
+}
 
+fn router(state: Arc<AppState>) -> Router {
     use handlers::*;
-    let app = Router::new()
+    Router::new()
         .route("/", get(index))
         .route("/fragments/servers", get(servers_fragment))
         .route("/login", get(login_page).post(login))
@@ -394,7 +386,23 @@ async fn main() -> Result<()> {
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .layer(middleware::from_fn_with_state(state.clone(), api::cors))
         .layer(middleware::from_fn(security_headers))
-        .with_state(state);
+        .with_state(state)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,kube=warn".into()))
+        .init();
+    let cfg = Config::parse();
+    site::install(site::Site::load(cfg.site_config.as_deref())?);
+    let client = Client::try_default().await?;
+    let backend = (!cfg.users_secret.is_empty()).then(|| {
+        let ns = if cfg.pod_namespace.is_empty() { client.default_namespace().to_string() } else { cfg.pod_namespace.clone() };
+        Backend { secrets: kube::Api::namespaced(client.clone(), &ns), name: cfg.users_secret.clone() }
+    });
+    let users = Users::load(backend, Some(&cfg.password)).await?;
+    let app = router(Arc::new(new_state(&cfg, client, users)?));
 
     let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;
     tracing::info!("dashboard listening on {}", cfg.listen);

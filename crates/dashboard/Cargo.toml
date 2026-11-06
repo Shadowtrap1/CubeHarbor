@@ -26,3 +26,6 @@ maud = "0.27"
 sha2 = "0.11"
 argon2 = { version = "0.5", features = ["std"] }
 tokio-stream = "0.1"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

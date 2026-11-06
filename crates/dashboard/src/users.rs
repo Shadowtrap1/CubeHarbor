@@ -450,8 +450,8 @@ mod tests {
     #[test]
     fn roles_per_route() {
         use Role::*;
-        let get = |p| required_role(&Method::GET, p);
-        let post = |p| required_role(&Method::POST, p);
+        let get = |p: &str| required_role(&Method::GET, p);
+        let post = |p: &str| required_role(&Method::POST, p);
         // Reading.
         for p in ["/", "/fragments/servers", "/servers/mc/a", "/servers/mc/a/logs", "/servers/mc/a/compose.yaml", "/compose/export",
             "/account", "/api/servers", "/api/v1/servers", "/api/v1/compose", "/api/v1/servers/mc/a/compose", "/api/modpacks/search"] {
