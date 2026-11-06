@@ -1,0 +1,38 @@
+{{- /* Who may connect to the dashboard. On by default with cloudflareTunnel, so pods other than
+cloudflared can't reach it and forge X-Forwarded-For from inside dashboard.trustedProxies. */ -}}
+{{- $np := .Values.dashboard.networkPolicy -}}
+{{- $enabled := $np.enabled -}}
+{{- if kindIs "invalid" $enabled }}{{ $enabled = .Values.cloudflareTunnel.enabled }}{{ end -}}
+{{- if and .Values.dashboard.enabled $enabled }}
+{{- if and .Values.dashboard.ingress.enabled (empty $np.allowFrom) }}
+{{- fail "dashboard.networkPolicy would block the Ingress controller: list it in dashboard.networkPolicy.allowFrom (e.g. a namespaceSelector for its namespace), or set dashboard.networkPolicy.enabled=false" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cubeharbor.fullname" . }}-dashboard
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  podSelector:
+    matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
+      app.kubernetes.io/component: dashboard
+  policyTypes: [Ingress]
+  {{- if or .Values.cloudflareTunnel.enabled $np.allowFrom }}
+  ingress:
+    - from:
+        {{- if .Values.cloudflareTunnel.enabled }}
+        - podSelector:
+            matchLabels: {{- include "cubeharbor.selector" . | nindent 14 }}
+              app.kubernetes.io/component: cloudflared
+        {{- end }}
+        {{- with $np.allowFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - { port: 8080, protocol: TCP }
+  {{- else }}
+  # Nothing is listed: only kubectl port-forward (and the node, e.g. kubelet probes) reach it.
+  ingress: []
+  {{- end }}
+{{- end }}

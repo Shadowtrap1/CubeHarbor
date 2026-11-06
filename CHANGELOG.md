@@ -33,6 +33,10 @@ All notable changes are listed here. The format follows
   (`dashboard.manageUsers`, on by default; it now also works with `existingSecret`).
 * Dashboard: per-user **API tokens** (`Authorization: Bearer chb_...`), created and revoked on
   the Account page and stored hashed. A token has its user's role.
+* Chart: `dashboard.networkPolicy` admits only cloudflared and `allowFrom` (e.g. the ingress
+  controller) to the dashboard. It's on by default with `cloudflareTunnel`, so other pods
+  (including Minecraft servers running third-party plugins) can't forge `X-Forwarded-For` from
+  inside `dashboard.trustedProxies` to dodge the per-client login limit.
 * Dashboard: an **Account** page to change the login password (current password required,
   at least 12 characters). It's saved to the dashboard's Secret and logs out other sessions
   (`dashboard.allowPasswordChange`, on by default; off with `existingSecret`). The README now

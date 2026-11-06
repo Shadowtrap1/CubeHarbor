@@ -261,6 +261,18 @@ dashboard:
   #    memoryOptions: [4Gi, 6Gi, 8Gi, 12Gi, 16Gi]
   #    autoSleepMinutes: 20
   #    voice: true
+  # -- NetworkPolicy that only lets cloudflared (with cloudflareTunnel) and `allowFrom` connect to
+  # the dashboard. Without it, any pod (including Minecraft servers running third-party plugins)
+  # could reach it from inside trustedProxies and forge X-Forwarded-For to dodge the per-client
+  # login limit. null = on with cloudflareTunnel, off otherwise. Needs a CNI that enforces
+  # NetworkPolicy (k3s does by default). kubectl port-forward and the node itself are not affected.
+  networkPolicy:
+    enabled: null
+    # -- More NetworkPolicyPeers allowed in: your ingress controller (required when
+    # dashboard.ingress is enabled), or another cubeharbor release in the cluster that lists this
+    # dashboard in its `remotes`. No cubeharbor component calls the dashboard itself.
+    # - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+    allowFrom: []
   service:
     type: ClusterIP
     port: 80

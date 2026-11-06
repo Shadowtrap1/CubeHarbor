@@ -487,12 +487,24 @@ around the tunnel and Access.
   ignored. `CF-Connecting-IP` is not used, because any other trusted proxy (e.g. an Ingress
   controller) would pass a forged one through unchanged. Keep `dashboard.service.type: ClusterIP`:
   NodePort/LoadBalancer traffic is often source-NATed to an address inside the pod CIDR, which
-  would make those clients "trusted" and let them pick their own address. The same goes for
-  every pod in the cluster, including Minecraft server pods running third-party mods and plugins:
-  one could send forged `X-Forwarded-For` headers to the dashboard and spread its password guesses
-  over made-up addresses, so only the overall limit (`dashboard.loginMaxFailuresTotal`) would slow
-  it. Give every dashboard user a long password, and keep the overall limit on if you run plugins you don't
-  fully trust.
+  would make those clients "trusted" and let them pick their own address.
+* **Only cloudflared can connect to the dashboard.** Every pod is inside the pod CIDR, including
+  Minecraft server pods running third-party mods and plugins, so any of them could otherwise send
+  forged `X-Forwarded-For` headers and spread password guesses over made-up addresses. With the
+  tunnel on, the chart adds a NetworkPolicy (`dashboard.networkPolicy`) that admits only the
+  cloudflared pods plus whatever you list in `dashboard.networkPolicy.allowFrom`. If the dashboard
+  also has an Ingress, add your ingress controller there (the chart refuses to render otherwise):
+
+  ```yaml
+  dashboard:
+    networkPolicy:
+      allowFrom:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+  ```
+
+  `kubectl port-forward` keeps working. The policy needs a CNI that enforces NetworkPolicy (k3s
+  does by default); without one, give every dashboard user a long password and keep the overall
+  login limit (`dashboard.loginMaxFailuresTotal`) on.
 
 **Locally-managed tunnel (`mode: local`).** If you'd rather keep the routes in Git, create
 the tunnel with the CLI (`cloudflared tunnel login`, `cloudflared tunnel create cubeharbor`,
