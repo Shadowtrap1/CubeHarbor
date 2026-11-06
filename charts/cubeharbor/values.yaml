@@ -81,6 +81,37 @@ curseforge:
   # -- Or reference an existing secret with key `apiKey`.
   existingSecret: ""
 
+dns:
+  # Keep Cloudflare DNS records pointed at your public IPv4 address, for home installs whose ISP
+  # changes it. The operator looks the address up every `interval` and only calls Cloudflare when
+  # it changed. Records are created when missing and updated when wrong, always as "DNS only"
+  # (proxied: false; Cloudflare's proxy can't carry Minecraft). Other records are left alone and
+  # nothing is ever deleted. IPv4 (A records) only.
+  cloudflare:
+    enabled: false
+    # -- Existing Secret with a Cloudflare API token (Zone > DNS > Edit on the zone). Required.
+    # kubectl -n <ns> create secret generic cloudflare-dns --from-literal=apiToken=<token>
+    existingSecret: ""
+    # -- Key of the token in existingSecret.
+    secretKey: apiToken
+    # -- Zone name (example.com) or zone ID. Required.
+    zone: ""
+    # -- Record names to manage (default: `*.<minecraft.baseDomain>`). Add `minecraft.publicHost`
+    # here if it's a name in the zone, so voice chat / Bedrock addresses follow too. Names that
+    # are CNAMEs (e.g. a Cloudflare Tunnel hostname) and the dashboard's host are never changed.
+    records: []
+    # -- Also publish servers' own `routing.hostnames` that fall inside the zone (names a
+    # wildcard in `records` already covers are skipped). Records of deleted servers are kept.
+    serverHostnames: false
+    # -- How often to check the public IP (s, m or h; at least 30s).
+    interval: 5m
+    # -- TTL of the records, in seconds (1 = Cloudflare's automatic TTL, otherwise 60-86400).
+    ttl: 1
+    # -- URLs that answer with your public IPv4 as plain text, tried in order.
+    ipLookupUrls:
+      - https://api.ipify.org
+      - https://ipv4.icanhazip.com
+
 # -- Shared download cache (ReadWriteMany). Speeds up installing the same large modpack on several servers.
 cache:
   enabled: false
