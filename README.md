@@ -465,7 +465,7 @@ Cloudflare. If your network blocks outbound UDP (QUIC on port 7844), set
 
 **5. Put Cloudflare Access in front of it (strongly recommended).** Without it, anyone who finds
 the hostname gets the login page, and the only things between them and your servers are the
-dashboard password and its login rate limit. In *Zero Trust → Access → Applications*, add a
+dashboard users' passwords and the login rate limit. In *Zero Trust → Access → Applications*, add a
 self-hosted application for `dash.example.com` with a policy that allows only your email
 addresses (one-time PIN or an identity provider). Visitors then sign in to Cloudflare before
 the request ever reaches your cluster. The dashboard does not check the `Cf-Access-Jwt-Assertion`
@@ -491,7 +491,7 @@ around the tunnel and Access.
   every pod in the cluster, including Minecraft server pods running third-party mods and plugins:
   one could send forged `X-Forwarded-For` headers to the dashboard and spread its password guesses
   over made-up addresses, so only the overall limit (`dashboard.loginMaxFailuresTotal`) would slow
-  it. Use a long dashboard password, and keep the overall limit on if you run plugins you don't
+  it. Give every dashboard user a long password, and keep the overall limit on if you run plugins you don't
   fully trust.
 
 **Locally-managed tunnel (`mode: local`).** If you'd rather keep the routes in Git, create
