@@ -28,7 +28,9 @@ document.querySelectorAll('[data-c]').forEach(b => b.onclick = () => {
 });
 stream(log.dataset.initial);
 
-document.getElementById('console').onsubmit = async e => {
+// Only operators and admins get the console form.
+const consoleForm = document.getElementById('console');
+if (consoleForm) consoleForm.onsubmit = async e => {
   e.preventDefault();
   const c = document.getElementById('cmd');
   const cmd = c.value.trim();

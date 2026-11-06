@@ -201,17 +201,21 @@ gateway:
 
 dashboard:
   enabled: true
-  # -- Login password, at least 12 characters recommended. Generated (and kept across upgrades)
-  # when empty. Set it here (`--set-string dashboard.password=...`), or keep it in your own
-  # Secret with a `password` key via `existingSecret`.
+  # -- Password of the first admin, user `admin`, at least 12 characters recommended. Generated
+  # (and kept across upgrades) when empty: `kubectl get secret <release>-dashboard -o
+  # jsonpath='{.data.password}' | base64 -d`. Set it here (`--set-string dashboard.password=...`),
+  # or keep it in your own Secret with a `password` key via `existingSecret`. It is only used
+  # while the dashboard has no users yet (first start, or after removing `users.json` from the
+  # `<release>-dashboard-users` Secret to recover); after that, change passwords in the dashboard.
   password: ""
   existingSecret: ""
-  # -- Let a logged-in user change the password on the dashboard's Account page (it's written
-  # back to the chart's Secret). If `password` is set here, the next `helm upgrade` restores it.
-  # Always off with `existingSecret`, since that Secret's owner (External Secrets, SOPS, ...) would
-  # revert the change. With `helm template`-based GitOps (Argo CD, Flux post-rendering) the Secret
-  # is re-rendered on every sync, so turn this off there too.
-  allowPasswordChange: true
+  # -- Keep users (roles, argon2id password hashes, API tokens) in the `<release>-dashboard-users`
+  # Secret, which the dashboard may get and patch, and manage them on its Users and Account pages.
+  # The chart creates that Secret without data, so upgrades and GitOps syncs don't overwrite the
+  # users (avoid Argo CD's `Replace=true` for it). Off: one user, `admin` with `password`, nothing
+  # changeable from the dashboard and no API tokens. The old `allowPasswordChange: false` also
+  # turns this off.
+  manageUsers: true
   # -- Namespace for servers created from the dashboard (release namespace when empty).
   defaultNamespace: ""
   # -- Extra namespaces the dashboard may manage (RBAC is granted per namespace). `["*"]` grants

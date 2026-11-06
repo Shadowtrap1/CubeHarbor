@@ -1,8 +1,11 @@
 //! cubeharbor-dashboard: web UI and API for creating and operating servers.
 
 mod api;
+#[cfg(test)]
+mod e2e_tests;
 mod handlers;
 mod site;
+mod users;
 mod views;
 
 use std::collections::HashMap;
@@ -23,15 +26,16 @@ use clap::Parser;
 use cubeharbor_core::cidr;
 use cubeharbor_core::sources::Http;
 use kube::Client;
-use sha2::{Digest, Sha256};
+use users::{Backend, Identity, Role, Users};
 
 #[derive(Parser, Debug, Clone)]
 #[command(version, about = "cubeharbor dashboard")]
 pub struct Config {
     #[arg(long, env = "LISTEN_ADDR", default_value = "0.0.0.0:8080")]
     pub listen: String,
-    /// Login password (also accepted as a Bearer token on /api).
-    #[arg(long, env = "DASHBOARD_PASSWORD", hide_env_values = true)]
+    /// Password of the first admin (`admin`), used when the user store is empty: on first start,
+    /// or to recover after removing `users.json` from `USERS_SECRET`.
+    #[arg(long, env = "DASHBOARD_PASSWORD", default_value = "", hide_env_values = true)]
     pub password: String,
     /// Namespace for servers created without one.
     #[arg(long, env = "DEFAULT_NAMESPACE", default_value = cubeharbor_core::defaults::NAMESPACE)]
@@ -69,11 +73,12 @@ pub struct Config {
     /// YAML file with branding, theme and form defaults (see `examples/site.yaml`).
     #[arg(long, env = "SITE_CONFIG")]
     pub site_config: Option<PathBuf>,
-    /// Secret (with a `password` key) the login password comes from. When set, the password can
-    /// be changed from the dashboard, which writes it back there so it survives restarts.
-    #[arg(long, env = "PASSWORD_SECRET", default_value = "")]
-    pub password_secret: String,
-    /// Namespace of `PASSWORD_SECRET` (the dashboard's own).
+    /// Secret the dashboard keeps its users in (key `users.json`; it needs get and patch on it).
+    /// Without it there is one user, `admin` with `DASHBOARD_PASSWORD`, and users and passwords
+    /// can't be changed from the dashboard.
+    #[arg(long, env = "USERS_SECRET", default_value = "")]
+    pub users_secret: String,
+    /// Namespace of `USERS_SECRET` (the dashboard's own).
     #[arg(long, env = "POD_NAMESPACE", default_value = "")]
     pub pod_namespace: String,
     /// Proxies (comma separated CIDRs, e.g. the ingress controller's pods) whose
@@ -95,8 +100,7 @@ pub struct AppState {
     pub remotes: Vec<(String, String)>,
     pub remote_cache: tokio::sync::Mutex<Option<api::RemoteCache>>,
     pub cors_origins: Vec<String>,
-    password_hash: Mutex<[u8; 32]>,
-    sessions: Mutex<HashMap<String, Instant>>,
+    pub users: Users,
     failures: Mutex<Failures>,
     trusted_proxies: Vec<cidr::Cidr>,
 }
@@ -174,16 +178,20 @@ impl AppState {
         f.limited(client)
     }
 
-    /// Constant-time password check that counts failures.
-    pub fn password_ok(&self, pw: &str, client: IpAddr) -> bool {
-        let ok = constant_eq(&Sha256::digest(pw.as_bytes()), &*self.password_hash.lock().unwrap());
-        if !ok {
-            let mut f = self.failures.lock().unwrap();
-            f.roll();
-            let n = f.record(client);
-            tracing::warn!("failed password attempt from {client} ({n} in the last minute)");
+    /// Check a user's password (argon2id), counting failures like a wrong login.
+    pub async fn check_login(&self, user: &str, pw: &str, client: IpAddr) -> Option<Role> {
+        let role = self.users.verify(user, pw).await;
+        if role.is_none() {
+            self.record_failure(client, "password");
         }
-        ok
+        role
+    }
+
+    fn record_failure(&self, client: IpAddr, what: &str) {
+        let mut f = self.failures.lock().unwrap();
+        f.roll();
+        let n = f.record(client);
+        tracing::warn!("failed {what} attempt from {client} ({n} in the last minute)");
     }
 
     /// The client's address: the TCP peer, or for a trusted proxy the last `X-Forwarded-For`
@@ -191,34 +199,6 @@ impl AppState {
     pub fn client_ip(&self, peer: Option<IpAddr>, headers: &HeaderMap) -> IpAddr {
         let peer = peer.unwrap_or(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED));
         client_ip(peer, headers, &self.trusted_proxies)
-    }
-
-    /// Start a session: a random token known only to this process (logout revokes it).
-    pub fn new_session(&self) -> anyhow::Result<String> {
-        let token = random_hex(32)?;
-        let mut s = self.sessions.lock().unwrap();
-        s.retain(|_, exp| *exp > Instant::now());
-        s.insert(token.clone(), Instant::now() + SESSION_TTL);
-        Ok(token)
-    }
-
-    /// Can the password be changed from the dashboard?
-    pub fn password_changeable(&self) -> bool {
-        !self.cfg.password_secret.is_empty() && !self.cfg.pod_namespace.is_empty()
-    }
-
-    /// Use `new` from now on, and log out every session except `keep`.
-    pub fn set_password(&self, new: &str, keep: Option<&str>) {
-        *self.password_hash.lock().unwrap() = Sha256::digest(new.as_bytes()).into();
-        self.sessions.lock().unwrap().retain(|t, _| Some(t.as_str()) == keep);
-    }
-
-    pub fn end_session(&self, token: &str) {
-        self.sessions.lock().unwrap().remove(token);
-    }
-
-    fn session_ok(&self, token: &str) -> bool {
-        self.sessions.lock().unwrap().get(token).is_some_and(|exp| *exp > Instant::now())
     }
 
     /// May the dashboard touch servers in `ns`?
@@ -257,11 +237,15 @@ fn constant_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn random_hex(n: usize) -> anyhow::Result<String> {
+fn random_bytes(n: usize) -> anyhow::Result<Vec<u8>> {
     use std::io::Read;
     let mut buf = vec![0u8; n];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
-    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(buf)
+}
+
+fn random_hex(n: usize) -> anyhow::Result<String> {
+    Ok(random_bytes(n)?.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// The namespace segment of `/servers/{ns}/...` and `/api/v1/servers/{ns}/...`.
@@ -293,71 +277,94 @@ async fn security_headers(req: Request, next: Next) -> Response {
     resp
 }
 
-async fn auth(State(st): St, jar: CookieJar, req: Request, next: Next) -> Response {
+/// Who is asking: a session cookie, or an API token as `Authorization: Bearer chb_...`.
+/// Then the request must be allowed for their role (`users::required_role`). The identity is
+/// passed on to handlers as a request extension.
+async fn auth(State(st): St, jar: CookieJar, mut req: Request, next: Next) -> Response {
     let path = req.uri().path();
     let public_list = st.cfg.public_server_list && path == "/api/v1/servers" && req.method() == axum::http::Method::GET;
     if path == "/login" || path == "/healthz" || public_list || req.method() == axum::http::Method::OPTIONS {
         return next.run(req).await;
     }
-    let cookie_ok = jar.get(COOKIE).is_some_and(|c| st.session_ok(c.value()));
+    let from_cookie = jar.get(COOKIE).and_then(|c| st.users.session(c.value()));
     let bearer = req.headers().get(header::AUTHORIZATION).and_then(|h| h.to_str().ok()).and_then(|h| h.strip_prefix("Bearer "));
-    let bearer_ok = !cookie_ok && bearer.is_some() && {
-        let peer = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
-        let client = st.client_ip(peer, req.headers());
-        if st.throttled(client) {
-            return (StatusCode::TOO_MANY_REQUESTS, "too many failed logins, try again in a minute").into_response();
+    let me = match (from_cookie, bearer) {
+        (Some(me), _) => {
+            if !matches!(*req.method(), Method::GET | Method::HEAD) && cross_site(&req) {
+                return (StatusCode::FORBIDDEN, "cross-site request refused").into_response();
+            }
+            me
         }
-        bearer.is_some_and(|t| st.password_ok(t, client))
+        (None, Some(token)) => {
+            let peer = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
+            let client = st.client_ip(peer, req.headers());
+            if st.throttled(client) {
+                return (StatusCode::TOO_MANY_REQUESTS, "too many failed logins, try again in a minute").into_response();
+            }
+            match st.users.check_token(token.trim()) {
+                Some((name, role)) => Identity { name, role, session: None },
+                None => {
+                    st.record_failure(client, "API token");
+                    return (StatusCode::UNAUTHORIZED, bearer_hint(token)).into_response();
+                }
+            }
+        }
+        (None, None) if path.starts_with("/api/") => return (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
+        (None, None) => return Redirect::to("/login").into_response(),
     };
-    if cookie_ok || bearer_ok {
-        if cookie_ok && !bearer_ok && !matches!(*req.method(), Method::GET | Method::HEAD) && cross_site(&req) {
-            return (StatusCode::FORBIDDEN, "cross-site request refused").into_response();
-        }
-        if let Some(ns) = path_namespace(path)
-            && !st.ns_allowed(ns)
-        {
-            return (StatusCode::FORBIDDEN, format!("namespace {ns} is not managed by this dashboard")).into_response();
-        }
-        return next.run(req).await;
+    let needed = users::required_role(req.method(), path);
+    if !me.can(needed) {
+        return (StatusCode::FORBIDDEN, format!("{} needs the {} role (you are {})", path, needed.as_str(), me.role.as_str())).into_response();
     }
-    if path.starts_with("/api/") {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    if let Some(ns) = path_namespace(path)
+        && !st.ns_allowed(ns)
+    {
+        return (StatusCode::FORBIDDEN, format!("namespace {ns} is not managed by this dashboard")).into_response();
     }
-    Redirect::to("/login").into_response()
+    req.extensions_mut().insert(me);
+    next.run(req).await
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,kube=warn".into()))
-        .init();
-    let cfg = Config::parse();
-    anyhow::ensure!(!cfg.password.trim().is_empty(), "DASHBOARD_PASSWORD is empty: refusing to start with no login password");
-    if cfg.password.len() < 12 {
-        tracing::warn!("DASHBOARD_PASSWORD is shorter than 12 characters; use a longer one");
+/// The 401 body for a rejected Bearer token. Anything that isn't shaped like a `chb_` token is
+/// most likely a script still sending the old dashboard password.
+fn bearer_hint(presented: &str) -> &'static str {
+    if presented.trim().starts_with("chb_") {
+        "unauthorized: this API token is unknown or was revoked; create a new one on the dashboard's Account page (/account)"
+    } else {
+        "unauthorized: the dashboard password is no longer accepted as a Bearer token; log in, create an API token \
+         on the Account page (/account) and send it as `Authorization: Bearer chb_...`"
     }
-    site::install(site::Site::load(cfg.site_config.as_deref())?);
-    let state = Arc::new(AppState {
-        client: Client::try_default().await?,
+}
+
+fn new_state(cfg: &Config, client: Client, users: Users) -> Result<AppState> {
+    Ok(AppState {
+        client,
         http: Http::new(cfg.curseforge_api_key.clone())?,
-        password_hash: Mutex::new(Sha256::digest(cfg.password.as_bytes()).into()),
-        sessions: Mutex::new(HashMap::new()),
+        users,
         failures: Mutex::new(Failures::new(cfg.login_max_failures_total)),
         trusted_proxies: cidr::parse_list(&cfg.trusted_proxies)?,
         remotes: api::parse_remotes(&cfg.remotes),
         remote_cache: tokio::sync::Mutex::new(None),
         cors_origins: cfg.cors_origins.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(),
         cfg: cfg.clone(),
-    });
+    })
+}
 
+fn router(state: Arc<AppState>) -> Router {
     use handlers::*;
-    let app = Router::new()
+    Router::new()
         .route("/", get(index))
         .route("/fragments/servers", get(servers_fragment))
         .route("/login", get(login_page).post(login))
         .route("/logout", post(logout))
         .route("/account", get(account_page))
         .route("/account/password", post(change_password))
+        .route("/account/tokens", post(create_token))
+        .route("/account/tokens/{id}/revoke", post(revoke_token))
+        .route("/users", get(users_page).post(add_user))
+        .route("/users/{name}/role", post(set_role))
+        .route("/users/{name}/password", post(reset_password))
+        .route("/users/{name}/delete", post(remove_user))
         .route("/new", get(new_page))
         .route("/new/quick", post(quick_create))
         .route("/compose/preview", post(compose_preview))
@@ -379,7 +386,23 @@ async fn main() -> Result<()> {
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .layer(middleware::from_fn_with_state(state.clone(), api::cors))
         .layer(middleware::from_fn(security_headers))
-        .with_state(state);
+        .with_state(state)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,kube=warn".into()))
+        .init();
+    let cfg = Config::parse();
+    site::install(site::Site::load(cfg.site_config.as_deref())?);
+    let client = Client::try_default().await?;
+    let backend = (!cfg.users_secret.is_empty()).then(|| {
+        let ns = if cfg.pod_namespace.is_empty() { client.default_namespace().to_string() } else { cfg.pod_namespace.clone() };
+        Backend { secrets: kube::Api::namespaced(client.clone(), &ns), name: cfg.users_secret.clone() }
+    });
+    let users = Users::load(backend, Some(&cfg.password)).await?;
+    let app = router(Arc::new(new_state(&cfg, client, users)?));
 
     let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;
     tracing::info!("dashboard listening on {}", cfg.listen);
@@ -505,6 +528,12 @@ mod tests {
         f.max_total = 0;
         assert!(!f.limited(ip("192.0.2.2")));
         assert!(f.limited(ip("192.0.2.1")), "the per-client limit still applies");
+    }
+
+    #[test]
+    fn bearer_hints() {
+        assert!(bearer_hint("my-old-dashboard-password").contains("no longer accepted"));
+        assert!(bearer_hint("chb_0123_abcd").contains("unknown or was revoked"));
     }
 
     #[test]

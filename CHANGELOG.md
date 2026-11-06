@@ -24,6 +24,15 @@ All notable changes are listed here. The format follows
   is reserved (servers can't claim it with `expose: ingress`, and DDNS never manages it). The README covers the Cloudflare setup, Cloudflare
   Access, and setting `dashboard.trustedProxies` to the pod CIDR so failed logins are limited per
   visitor. Player traffic does not use the tunnel. See `examples/values-cloudflare-tunnel.yaml`.
+* Dashboard: **users and roles**. Each user has their own password and a role: `viewer`
+  (read-only), `operator` (also start/stop/restart and console) or `admin` (everything,
+  including users). Roles are enforced by the server on every page and `/api` route. Admins
+  manage users on a new **Users** page (add, remove, change role, reset password; there is always
+  at least one admin). Passwords are hashed with argon2id instead of unsalted SHA-256. Users are
+  kept in a new `<release>-dashboard-users` Secret, the only one the dashboard can read and write
+  (`dashboard.manageUsers`, on by default; it now also works with `existingSecret`).
+* Dashboard: per-user **API tokens** (`Authorization: Bearer chb_...`), created and revoked on
+  the Account page and stored hashed. A token has its user's role.
 * Chart: `dashboard.networkPolicy` admits only cloudflared and `allowFrom` (e.g. the ingress
   controller) to the dashboard. It's on by default with `cloudflareTunnel`, so other pods
   (including Minecraft servers running third-party plugins) can't forge `X-Forwarded-For` from
@@ -34,6 +43,16 @@ All notable changes are listed here. The format follows
   explains choosing your own password at install.
 
 ### Changed
+
+* **Breaking (dashboard):** log in with a user name. On upgrade, the existing password becomes
+  user `admin`; after that `dashboard.password` is only used to recreate `admin` when the users
+  Secret is empty (see the README for recovering a locked-out install). The password is no
+  longer accepted as a `Bearer` token on `/api` (such requests get `401` with a hint saying so).
+  To migrate a script: log in, open **Account → API tokens**, create a token (as a `viewer` user
+  if the script only reads), and send `Authorization: Bearer chb_...` instead of the password. A
+  password change no longer writes `dashboard.password`'s Secret; `PASSWORD_SECRET` is replaced
+  by `USERS_SECRET`, and `dashboard.allowPasswordChange` by `dashboard.manageUsers` (setting
+  `allowPasswordChange: false` still turns it off).
 
 * CRD: the API server now rejects MinecraftServers whose name isn't a DNS-1035 label of at most
   52 characters (such servers could never get a Service). An existing server with such a name
