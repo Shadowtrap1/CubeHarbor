@@ -185,7 +185,7 @@ Players reach servers at `<name>.<baseDomain>`, so the zone needs a wildcard rec
 IP at home, with port 25565 (and `minecraft.portRange`, for voice chat and Bedrock) forwarded to
 the gateway. Servers with their own `routing.hostnames` need records for those names too.
 
-### Dynamic public IP with Cloudflare
+### Dynamic DNS with Cloudflare
 
 At home the ISP may change your public IP. If the zone is on Cloudflare, the operator can keep
 the records pointed at it. (external-dns doesn't fit here: it publishes the Service's address,
@@ -194,21 +194,21 @@ which behind a home router is a LAN address.)
 ```sh
 # A token from https://dash.cloudflare.com/profile/api-tokens with Zone > DNS > Edit on the zone
 # (the "Edit zone DNS" template)
-kubectl -n cubeharbor create secret generic cloudflare-dns --from-literal=apiToken=<token>
+kubectl -n cubeharbor create secret generic cubeharbor-cloudflare-api --from-literal=apiToken=<token>
 
 helm upgrade cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor -n cubeharbor --reuse-values \
-  --set dns.cloudflare.enabled=true \
-  --set dns.cloudflare.existingSecret=cloudflare-dns \
-  --set dns.cloudflare.zone=example.com
+  --set cloudflareDdns.enabled=true \
+  --set cloudflareDdns.existingSecret=cubeharbor-cloudflare-api \
+  --set cloudflareDdns.zone=example.com
 ```
 
-* Every `dns.cloudflare.interval` (5 minutes by default) the operator asks a lookup service for
-  its public IPv4 (`dns.cloudflare.ipLookupUrls`: api.ipify.org, then ipv4.icanhazip.com). It
+* Every `cloudflareDdns.interval` (5 minutes by default) the operator asks a lookup service for
+  its public IPv4 (`cloudflareDdns.ipLookupUrls`: api.ipify.org, then ipv4.icanhazip.com). It
   only calls Cloudflare when the address, or the set of names, changed since the last successful
   update, and after a restart.
-* It manages `*.<baseDomain>` by default, or the names in `dns.cloudflare.records`. Add
+* It manages `*.<baseDomain>` by default, or the names in `cloudflareDdns.records`. Add
   `minecraft.publicHost` there if it's a separate name in the zone. With
-  `dns.cloudflare.serverHostnames: true`, servers' own hostnames inside the zone are published as
+  `cloudflareDdns.serverHostnames: true`, servers' own hostnames inside the zone are published as
   well (names the wildcard already covers are skipped).
 * A missing A record is created (with the comment `managed by cubeharbor`). A wrong one is updated,
   and so is a proxied one: records are always "DNS only", because Cloudflare's proxy only carries
@@ -470,7 +470,7 @@ every namespace the dashboard manages.
   port can't block logins; UDP sessions are capped per port (`MAX_UDP_SESSIONS`, default 4096).
   TCP connections with no traffic for `gateway.idleTimeoutSeconds` (default 600) are closed,
   which also cuts quiet WebSocket UIs on forwarded ports; raise it or set 0 if that matters.
-* **Cloudflare token.** With `dns.cloudflare.enabled`, only the operator gets the API token, from
+* **Cloudflare token.** With `cloudflareDdns.enabled`, only the operator gets the API token, from
   your own Secret. Scope it to Zone > DNS > Edit on the one zone. Its value is never logged.
 * Operator, gateway and dashboard run as non-root with a read-only root filesystem on distroless images.
 
