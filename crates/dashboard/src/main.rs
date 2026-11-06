@@ -467,6 +467,17 @@ mod tests {
         // Clients outside the pod CIDR (port-forward, a hostNetwork pod) can't pick an address.
         assert_eq!(client_ip(ip("127.0.0.1"), &headers("6.6.6.6"), &trusted), ip("127.0.0.1"));
         assert_eq!(client_ip(ip("192.168.1.20"), &headers("6.6.6.6"), &trusted), ip("192.168.1.20"));
+
+        // Two visitors arriving through the same cloudflared pod get separate login limits.
+        let mut f = Failures::new(100);
+        let guesser = client_ip(cloudflared, &headers("198.51.100.7"), &trusted);
+        for _ in 0..MAX_FAILURES_PER_CLIENT {
+            f.record(guesser);
+        }
+        assert!(f.limited(guesser));
+        assert!(!f.limited(client_ip(cloudflared, &headers("203.0.113.50"), &trusted)));
+        // Without trustedProxies they would all be the cloudflared pod and share one limit.
+        assert_eq!(client_ip(cloudflared, &headers("203.0.113.50"), &[]), cloudflared);
     }
 
     #[test]
