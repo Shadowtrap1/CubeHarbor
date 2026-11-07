@@ -67,4 +67,6 @@ if docker buildx version > /dev/null 2>&1 && command -v jq > /dev/null; then
 else
   echo "docker buildx or jq not installed, skipping the image check"
 fi
+echo "--- charts/cubeharbor/README.md values table matches values.yaml"
+python3 scripts/chart-readme.py --check
 echo "chart OK"

@@ -1,7 +1,7 @@
 REGISTRY ?= ghcr.io/shadowtrap1
 TAG ?= 0.1.0
 
-.PHONY: test lint crd images push chart-lint local local-deploy
+.PHONY: test lint crd images push chart-lint chart-readme local local-deploy
 test:
 	cargo test --workspace
 
@@ -17,6 +17,10 @@ images:
 
 push:
 	REGISTRY=$(REGISTRY) TAG=$(TAG) docker buildx bake --push
+
+# Regenerate the values table in charts/cubeharbor/README.md from values.yaml.
+chart-readme:
+	scripts/chart-readme.py
 
 # helm lint + template for every values combination (and kubeconform when installed).
 chart-lint:
