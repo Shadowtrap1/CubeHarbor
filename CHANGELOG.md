@@ -99,6 +99,16 @@ All notable changes are listed here. The format follows
 
 ### Changed
 
+* Operator: **leader election**, so `operator.replicas` can be 2 or more (the chart no longer
+  refuses it). Only the replica holding the `<release>-operator` Lease reconciles; a standby takes
+  over within ~15 seconds if it dies, or immediately when it shuts down (it releases the Lease
+  after finishing the reconciles in flight). A leader that can't renew the Lease for 10 seconds
+  exits rather than risk two operators allocating ports. On by default
+  (`operator.leaderElection`), which adds Lease RBAC in the release namespace and switches the
+  operator Deployment from `Recreate` to rolling updates.
+* Operator: `/readyz` and Prometheus `/metrics` on the health port (8080): reconcile count,
+  errors and time, gateway-ports sync errors, leader status, and (on the leader) servers by phase,
+  players online and allocated ports. The chart adds a readiness probe.
 * **Breaking (chart):** the new `values.schema.json` rejects values files that Helm used to
   accept silently: unknown top-level keys (left over from an old version, or misspelled), wrong
   types (e.g. a number where a string is expected) and values outside the listed choices. Run

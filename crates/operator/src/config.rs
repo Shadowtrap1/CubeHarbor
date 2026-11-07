@@ -74,8 +74,21 @@ pub struct Config {
     #[arg(long, env = "WATCH_NAMESPACE", default_value = "")]
     pub watch_namespace: String,
 
+    /// `/healthz`, `/readyz` and Prometheus `/metrics`.
     #[arg(long, env = "METRICS_ADDR", default_value = "0.0.0.0:8080")]
     pub health_addr: String,
+
+    /// Elect a leader with a Lease so several replicas can run; only the leader reconciles.
+    #[arg(long, env = "LEADER_ELECTION", default_value_t = false, action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
+    pub leader_election: bool,
+    /// Name of the Lease, in POD_NAMESPACE (or the gateway namespace when that's empty).
+    #[arg(long, env = "LEADER_ELECTION_LEASE", default_value = "cubeharbor-operator")]
+    pub leader_election_lease: String,
+    #[arg(long, env = "POD_NAMESPACE", default_value = "")]
+    pub pod_namespace: String,
+    /// This replica's identity in the Lease (the pod name; HOSTNAME when empty).
+    #[arg(long, env = "POD_NAME", default_value = "")]
+    pub pod_name: String,
 
     /// Allow `spec.image` to replace the cubeharbor server image. Off by default: whoever can
     /// edit a MinecraftServer could otherwise run any container image in its namespace.

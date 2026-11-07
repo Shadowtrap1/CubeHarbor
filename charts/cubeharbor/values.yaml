@@ -127,8 +127,12 @@ cache:
   accessMode: ReadWriteMany
 
 operator:
-  # -- Must be 1: port allocation is coordinated inside the operator process.
+  # -- 2 or more keeps a standby ready to take over within ~15s. Needs leaderElection: only the
+  # replica holding the Lease reconciles (port allocation is coordinated inside one process).
   replicas: 1
+  # -- Elect a leader with a coordination.k8s.io Lease named <release>-operator. With it on,
+  # upgrades roll (the new pod takes over when the old one releases the Lease); off = Recreate.
+  leaderElection: true
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { memory: 256Mi }

@@ -1,5 +1,5 @@
 {{- $fullname := include "cubeharbor.fullname" . -}}
-{{- if gt (int .Values.operator.replicas) 1 }}{{ fail "operator.replicas must be 1: port allocation is coordinated inside one operator process" }}{{ end -}}
+{{- if and (gt (int .Values.operator.replicas) 1) (not .Values.operator.leaderElection) }}{{ fail "operator.replicas > 1 needs operator.leaderElection: only one operator may reconcile at a time" }}{{ end -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -60,6 +60,12 @@ rules:
     resources: [configmaps]
     verbs: [get, list, watch, patch]
 {{- end }}
+{{- if and (eq $ns $.Release.Namespace) $.Values.operator.leaderElection }}
+  # Leader election between operator replicas.
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -85,7 +91,9 @@ metadata:
     app.kubernetes.io/component: operator
 spec:
   replicas: {{ .Values.operator.replicas }}
+  {{- if not .Values.operator.leaderElection }}
   strategy: { type: Recreate }
+  {{- end }}
   selector:
     matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
       app.kubernetes.io/component: operator
@@ -102,6 +110,12 @@ spec:
           {{- include "cubeharbor.containerSecurity" . | nindent 10 }}
           env:
             - { name: METRICS_ADDR, value: {{ include "cubeharbor.listen" (dict "root" . "port" 8080) | quote }} }
+            - { name: LEADER_ELECTION, value: {{ .Values.operator.leaderElection | quote }} }
+            - { name: LEADER_ELECTION_LEASE, value: {{ printf "%s-operator" $fullname | quote }} }
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
             - { name: DEFAULT_CPU_REQUEST, value: {{ .Values.minecraft.defaultCpuRequest | default "500m" | quote }} }
             - { name: SERVER_POD_DEFAULTS, value: {{ include "cubeharbor.serverPodDefaults" . | quote }} }
             - { name: GATEWAY_IP_FAMILY_POLICY, value: {{ .Values.network.ipFamilyPolicy | quote }} }
@@ -168,6 +182,8 @@ spec:
             {{- end }}
           ports:
             - { name: health, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
           livenessProbe:
             httpGet: { path: /healthz, port: health }
             periodSeconds: 20
