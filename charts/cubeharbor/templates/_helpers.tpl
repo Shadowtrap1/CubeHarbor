@@ -12,6 +12,20 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
+{{- with .Values.commonLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/* Pod template metadata: (dict "root" $ "component" "gateway" "values" .Values.gateway
+     ["annotations" (dict ...)]). Labels: the selector labels, which always win, then
+     commonLabels, then podLabels. Annotations: the chart's own checksums plus podAnnotations. */}}
+{{- define "cubeharbor.podMetadata" -}}
+{{- $labels := merge (dict "app.kubernetes.io/component" .component) (fromYaml (include "cubeharbor.selector" .root)) (.root.Values.commonLabels | default dict) (.values.podLabels | default dict) -}}
+labels: {{- toYaml $labels | nindent 2 }}
+{{- with merge (dict) (.annotations | default dict) (.values.podAnnotations | default dict) }}
+annotations: {{- toYaml . | nindent 2 }}
+{{- end }}
 {{- end -}}
 
 {{- define "cubeharbor.tag" -}}{{ .Values.image.tag | default .Chart.AppVersion }}{{- end -}}

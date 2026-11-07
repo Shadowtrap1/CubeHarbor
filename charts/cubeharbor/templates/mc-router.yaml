@@ -61,9 +61,7 @@ spec:
     matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
       app.kubernetes.io/component: mc-router
   template:
-    metadata:
-      labels: {{- include "cubeharbor.selector" . | nindent 8 }}
-        app.kubernetes.io/component: mc-router
+    metadata: {{- include "cubeharbor.podMetadata" (dict "root" . "component" "mc-router" "values" .Values.mcRouter) | nindent 6 }}
     spec:
       serviceAccountName: {{ $fullname }}-mc-router
       {{- include "cubeharbor.pod" . | nindent 6 }}

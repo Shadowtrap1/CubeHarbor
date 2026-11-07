@@ -42,14 +42,10 @@ spec:
     matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
       app.kubernetes.io/component: cloudflared
   template:
-    metadata:
-      labels: {{- include "cubeharbor.selector" . | nindent 8 }}
-        app.kubernetes.io/component: cloudflared
-      {{- if $local }}
-      annotations:
-        # Roll the tunnel when its ingress rules change.
-        checksum/config: {{ include "cubeharbor.cloudflaredConfig" . | sha256sum }}
-      {{- end }}
+    {{- /* Roll the tunnel when its ingress rules change. */}}
+    {{- $checksum := dict }}
+    {{- if $local }}{{ $checksum = dict "checksum/config" (include "cubeharbor.cloudflaredConfig" . | sha256sum) }}{{ end }}
+    metadata: {{- include "cubeharbor.podMetadata" (dict "root" . "component" "cloudflared" "values" $t "annotations" $checksum) | nindent 6 }}
     spec:
       # cloudflared never talks to the Kubernetes API.
       automountServiceAccountToken: false
@@ -108,4 +104,18 @@ spec:
             secretName: {{ $t.existingSecret }}
             items: [{ key: {{ $secretKey | quote }}, path: credentials.json }]
       {{- end }}
+{{- if and ($t.pdb | default dict).enabled (gt (int $t.replicas) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-cloudflared
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cloudflared
+spec:
+  minAvailable: {{ $t.pdb.minAvailable }}
+  selector:
+    matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
+      app.kubernetes.io/component: cloudflared
+{{- end }}
 {{- end }}

@@ -6,6 +6,10 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
+# -- Labels added to every object the chart creates and to its pods (e.g. team, cost center).
+# Don't use app.kubernetes.io/* keys here: the chart sets those itself.
+commonLabels: {}
+
 # -- Pod securityContext of the operator, gateway, dashboard and mc-router pods.
 # On OpenShift set this to {} so the restricted SCC assigns the UID.
 podSecurityContext:
@@ -130,6 +134,9 @@ operator:
   topologySpreadConstraints: []
   priorityClassName: ""
   logLevel: info
+  # -- Extra labels and annotations on the operator pods (e.g. for log shippers or service meshes).
+  podLabels: {}
+  podAnnotations: {}
 
 router:
   # -- Who routes Java players by hostname: `gateway` (cubeharbor-gateway, also answers pings for
@@ -160,6 +167,9 @@ mcRouter:
   affinity: {}
   topologySpreadConstraints: []
   priorityClassName: ""
+  # -- Extra labels and annotations on the mc-router pods (e.g. for log shippers or service meshes).
+  podLabels: {}
+  podAnnotations: {}
 
 gateway:
   # -- More than one replica is supported; players are spread by the load balancer.
@@ -198,6 +208,9 @@ gateway:
   affinity: {}
   topologySpreadConstraints: []
   priorityClassName: ""
+  # -- Extra labels and annotations on the gateway pods (e.g. for log shippers or service meshes).
+  podLabels: {}
+  podAnnotations: {}
 
 dashboard:
   enabled: true
@@ -290,6 +303,9 @@ dashboard:
   affinity: {}
   topologySpreadConstraints: []
   priorityClassName: ""
+  # -- Extra labels and annotations on the dashboard pods (e.g. for log shippers or service meshes).
+  podLabels: {}
+  podAnnotations: {}
 
 # -- Reach the dashboard from outside your network through a Cloudflare Tunnel: cloudflared
 # dials out to Cloudflare, so no router port is opened for the dashboard. Only the dashboard
@@ -325,6 +341,10 @@ cloudflareTunnel:
   # -- Each replica holds its own connections to Cloudflare; 2 keeps the dashboard reachable
   # while one restarts.
   replicas: 2
+  # -- PodDisruptionBudget, created when replicas > 1 so node drains keep one cloudflared up.
+  pdb:
+    enabled: true
+    minAvailable: 1
   # -- Edge transport: auto (default, QUIC with HTTP/2 fallback), quic or http2. Use http2 if
   # your network blocks outbound UDP 7844.
   protocol: ""
@@ -338,6 +358,9 @@ cloudflareTunnel:
   affinity: {}
   topologySpreadConstraints: []
   priorityClassName: ""
+  # -- Extra labels and annotations on the cloudflared pods (e.g. for log shippers or service meshes).
+  podLabels: {}
+  podAnnotations: {}
 
 # -- MinecraftServer resources to create with the release (full spec, see examples/).
 servers: {}

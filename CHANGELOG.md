@@ -15,6 +15,11 @@ All notable changes are listed here. The format follows
   `serverHostnames` for servers' own hostnames in the zone), always as DNS only (not proxied). Other records are left alone. The API token comes from an existing
   Secret, errors are retried with backoff, and no new RBAC is needed. IPv4 only. See "DNS setup"
   in the README.
+* Chart: `commonLabels` (added to every object and pod the chart creates) and `podLabels` /
+  `podAnnotations` for the operator, gateway, dashboard, mc-router and cloudflared pods, e.g. for
+  log shippers, service meshes or cost labels. The selector labels always win, so these can't
+  break a Deployment's selector. cloudflared also gets a PodDisruptionBudget when it runs more
+  than one replica (the default 2; `cloudflareTunnel.pdb`).
 * Chart: optional Cloudflare Tunnel for reaching the dashboard from outside your network
   without opening a router port (`cloudflareTunnel.enabled`, off by default). It runs a pinned
   `cloudflare/cloudflared` Deployment with a remotely-managed tunnel whose token comes from an
