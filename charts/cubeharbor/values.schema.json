@@ -51,6 +51,22 @@
       ],
       "description": "Log format of the operator, gateway and dashboard."
     },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "serviceMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "namespace": { "type": "string" },
+            "labels": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] } },
+            "interval": { "type": "string", "pattern": "^[0-9]+(ms|s|m|h)$" },
+            "scrapeTimeout": { "type": "string", "pattern": "^([0-9]+(ms|s|m|h))?$" }
+          }
+        }
+      }
+    },
     "podSecurityContext": {
       "type": [
         "object",

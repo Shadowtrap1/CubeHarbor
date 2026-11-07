@@ -125,6 +125,13 @@ the full details.
 | `imagePullSecrets` | `[]` |  |
 | `commonLabels` | `{}` | Labels added to every object the chart creates and to its pods (e.g. team, cost center). app.kubernetes.io/* and helm.sh/chart keys are ignored here: the chart sets those itself. |
 | `logFormat` | `text` | Log format of the operator, gateway and dashboard: "text" or "json" (one JSON object per line, for log collectors). |
+| `metrics` |  | Prometheus metrics. The gateway serves /metrics on its health port (8081) and the operator on 8080 (counts only: no hostnames, IPs or server names). `enabled` adds ClusterIP `<release>-gateway-metrics` / `<release>-operator-metrics` Services (never the public gateway Service) for Prometheus to scrape. |
+| `metrics.enabled` | `false` |  |
+| `metrics.serviceMonitor.enabled` | `false` | Also create a Prometheus Operator ServiceMonitor (needs the monitoring.coreos.com CRDs). |
+| `metrics.serviceMonitor.namespace` | `""` | Namespace of the ServiceMonitor (release namespace when empty). |
+| `metrics.serviceMonitor.labels` | `{}` | Extra labels, e.g. the `release: <name>` label your Prometheus selects ServiceMonitors by. |
+| `metrics.serviceMonitor.interval` | `30s` |  |
+| `metrics.serviceMonitor.scrapeTimeout` | `""` |  |
 | `podSecurityContext` |  | Pod securityContext of the operator, gateway, dashboard and mc-router pods. On OpenShift set this to {} so the restricted SCC assigns the UID. |
 | `podSecurityContext.runAsNonRoot` | `true` |  |
 | `podSecurityContext.runAsUser` | `65532` |  |
