@@ -4,7 +4,6 @@
 //! need, without pulling an HTTP stack into the gateway and operator.
 
 use std::fmt::Write as _;
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -165,19 +164,17 @@ fn escape(v: &str) -> String {
 }
 
 /// Resolves on SIGTERM or SIGINT (Ctrl-C).
-pub fn shutdown_signal() -> impl Future<Output = ()> {
-    async {
-        use tokio::signal::unix::{SignalKind, signal};
-        match (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) {
-            (Ok(mut term), Ok(mut int)) => {
-                tokio::select! {
-                    _ = term.recv() => {}
-                    _ = int.recv() => {}
-                }
+pub async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    match (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) {
+        (Ok(mut term), Ok(mut int)) => {
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = int.recv() => {}
             }
-            // Without signal handlers, never "receive" one: the process is then stopped by SIGKILL.
-            _ => std::future::pending().await,
         }
+        // Without signal handlers, never "receive" one: the process is then stopped by SIGKILL.
+        _ => std::future::pending().await,
     }
 }
 
