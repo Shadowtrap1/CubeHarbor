@@ -63,6 +63,10 @@ All notable changes are listed here. The format follows
 
 ### Changed
 
+* **Breaking (chart):** the new `values.schema.json` rejects values files that Helm used to
+  accept silently: unknown top-level keys (left over from an old version, or misspelled), wrong
+  types (e.g. a number where a string is expected) and values outside the listed choices. Run
+  `helm template` with your values before upgrading and fix or remove whatever it reports.
 * **Breaking (dashboard):** log in with a user name. On upgrade, the existing password becomes
   user `admin`; after that `dashboard.password` is only used to recreate `admin` when the users
   Secret is empty (see the README for recovering a locked-out install). The password is no
