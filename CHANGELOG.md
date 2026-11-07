@@ -24,6 +24,13 @@ All notable changes are listed here. The format follows
   is reserved (servers can't claim it with `expose: ingress`, and DDNS never manages it). The README covers the Cloudflare setup, Cloudflare
   Access, and setting `dashboard.trustedProxies` to the pod CIDR so failed logins are limited per
   visitor. Player traffic does not use the tunnel. See `examples/values-cloudflare-tunnel.yaml`.
+* Chart: optional Gateway API **HTTPRoute** for the dashboard (`dashboard.httpRoute`, off by
+  default) as an alternative to the Ingress: attach it to your Gateway with `parentRefs`, match
+  `hostnames` (reserved from servers' `expose: ingress`, like the Ingress host), and terminate
+  TLS on the Gateway's HTTPS listener (cert-manager's issuer annotation goes on the Gateway). With
+  `dashboard.networkPolicy` on, the chart requires `allowFrom` for it, as it does for the
+  Ingress. The values now document the cert-manager setup for the Ingress, and NOTES shows
+  `http://` for an Ingress without `tls`.
 * Dashboard: **users and roles**. Each user has their own password and a role: `viewer`
   (read-only), `operator` (also start/stop/restart and console) or `admin` (everything,
   including users). Roles are enforced by the server on every page and `/api` route. Admins

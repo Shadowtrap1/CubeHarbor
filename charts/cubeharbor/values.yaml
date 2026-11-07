@@ -276,12 +276,31 @@ dashboard:
   service:
     type: ClusterIP
     port: 80
+  # -- Ingress for the dashboard. Serve it over TLS: passwords and the session cookie cross this
+  # connection. With cert-manager, add an issuer annotation and a tls entry, e.g.
+  #   annotations: { cert-manager.io/cluster-issuer: letsencrypt }
+  #   tls: [{ hosts: [cubeharbor.example.com], secretName: cubeharbor-dashboard-tls }]
+  # With dashboard.networkPolicy on, also list the ingress controller in networkPolicy.allowFrom.
   ingress:
     enabled: false
+    # -- IngressClass (cluster default when empty), e.g. nginx, traefik.
     className: ""
     host: cubeharbor.example.com
     annotations: {}
     tls: []
+  # -- Gateway API HTTPRoute for the dashboard, as an alternative to the Ingress. Needs the
+  # Gateway API CRDs (gateway.networking.k8s.io/v1) and a Gateway you run. TLS is terminated by
+  # the Gateway's HTTPS listener (with cert-manager: the cert-manager.io/cluster-issuer annotation
+  # goes on the Gateway, not here); set cookieSecure: true when it serves HTTPS.
+  httpRoute:
+    enabled: false
+    # -- The Gateway (and listener) to attach to. Required, e.g.
+    # [{ name: public, namespace: gateway-system, sectionName: https }]
+    parentRefs: []
+    # -- Hostnames to match, e.g. [cubeharbor.example.com] (empty = every hostname of the listener).
+    # Servers can't claim these with `expose: ingress`.
+    hostnames: []
+    annotations: {}
   resources:
     requests: { cpu: 20m, memory: 32Mi }
     limits: { memory: 256Mi }
