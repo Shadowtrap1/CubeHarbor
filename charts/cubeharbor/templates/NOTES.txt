@@ -28,9 +28,18 @@ Dashboard:
 {{- if and .Values.cloudflareTunnel.enabled .Values.cloudflareTunnel.hostname }}
   https://{{ .Values.cloudflareTunnel.hostname }} (Cloudflare Tunnel)
 {{- end }}
+{{- $route := .Values.dashboard.httpRoute | default dict }}
 {{- if .Values.dashboard.ingress.enabled }}
-  https://{{ .Values.dashboard.ingress.host }}
-{{- else if not (and .Values.cloudflareTunnel.enabled .Values.cloudflareTunnel.hostname) }}
+  http{{ if .Values.dashboard.ingress.tls }}s{{ end }}://{{ .Values.dashboard.ingress.host }}
+{{- end }}
+{{- if $route.enabled }}
+{{- range $route.hostnames }}
+  http{{ if $.Values.dashboard.cookieSecure }}s{{ end }}://{{ . }} (HTTPRoute)
+{{- else }}
+  HTTPRoute on {{ toJson $route.parentRefs }} (every hostname of that listener)
+{{- end }}
+{{- end }}
+{{- if not (or .Values.dashboard.ingress.enabled $route.enabled (and .Values.cloudflareTunnel.enabled .Values.cloudflareTunnel.hostname)) }}
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullname }}-dashboard 8080:{{ .Values.dashboard.service.port }}
 {{- end }}
   User: admin. Password ({{ if or .Values.dashboard.password .Values.dashboard.existingSecret }}the one you set{{ else }}generated; set your own with dashboard.password{{ end }}):

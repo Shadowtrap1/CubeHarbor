@@ -241,4 +241,32 @@ spec:
                 name: {{ $fullname }}-dashboard
                 port: { name: http }
 {{- end }}
+{{- with .Values.dashboard.httpRoute }}
+{{- if .enabled }}
+{{- if empty .parentRefs }}
+{{- fail "dashboard.httpRoute.parentRefs is required: the Gateway (and listener) that should serve the dashboard" }}
+{{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}-dashboard
+  labels: {{- include "cubeharbor.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+  {{- with .annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs: {{- toYaml .parentRefs | nindent 4 }}
+  {{- with .hostnames }}
+  hostnames: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: / }
+      backendRefs:
+        - name: {{ $fullname }}-dashboard
+          port: {{ $.Values.dashboard.service.port }}
+{{- end }}
+{{- end }}
 {{- end }}

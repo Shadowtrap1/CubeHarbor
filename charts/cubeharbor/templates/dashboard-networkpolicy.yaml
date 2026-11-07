@@ -7,6 +7,9 @@ cloudflared can't reach it and forge X-Forwarded-For from inside dashboard.trust
 {{- if and .Values.dashboard.ingress.enabled (empty $np.allowFrom) }}
 {{- fail "dashboard.networkPolicy would block the Ingress controller: list it in dashboard.networkPolicy.allowFrom (e.g. a namespaceSelector for its namespace), or set dashboard.networkPolicy.enabled=false" }}
 {{- end }}
+{{- if and (.Values.dashboard.httpRoute | default dict).enabled (empty $np.allowFrom) }}
+{{- fail "dashboard.networkPolicy would block the Gateway API implementation: list its pods in dashboard.networkPolicy.allowFrom (e.g. a namespaceSelector for its namespace), or set dashboard.networkPolicy.enabled=false" }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

@@ -139,6 +139,7 @@ spec:
             - { name: INGRESS_HOST_SUFFIXES, value: {{ join "," .Values.minecraft.ingressHostSuffixes | quote }} }
             {{- $reserved := list }}
             {{- if and .Values.dashboard.enabled .Values.dashboard.ingress.enabled }}{{ $reserved = append $reserved .Values.dashboard.ingress.host }}{{ end }}
+            {{- with .Values.dashboard.httpRoute }}{{ if and $.Values.dashboard.enabled .enabled }}{{ $reserved = concat $reserved (.hostnames | default list) }}{{ end }}{{ end }}
             {{- if and .Values.cloudflareTunnel.enabled .Values.cloudflareTunnel.hostname }}{{ $reserved = append $reserved .Values.cloudflareTunnel.hostname }}{{ end }}
             - { name: RESERVED_HOSTS, value: {{ join "," $reserved | quote }} }
             - { name: RCON_NETWORK_POLICY, value: {{ .Values.minecraft.rconNetworkPolicy | quote }} }

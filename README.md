@@ -138,7 +138,19 @@ kubectl -n cubeharbor rollout restart deploy/cubeharbor-dashboard
 `dashboard.password`, no Users page, no password changes and no API tokens.
 
 Before you expose the dashboard, read [Security notes](#security-notes) and give it an Ingress
-with TLS (`dashboard.ingress`). [`examples/values-k3s.yaml`](examples/values-k3s.yaml) is a
+with TLS (`dashboard.ingress`, e.g. with a cert-manager issuer annotation), or a Gateway API
+HTTPRoute on an HTTPS listener (`dashboard.httpRoute`, plus `dashboard.cookieSecure: true`):
+
+```yaml
+dashboard:
+  cookieSecure: true
+  httpRoute:
+    enabled: true
+    parentRefs: [{ name: public, namespace: gateway-system, sectionName: https }]
+    hostnames: [cubeharbor.example.com]
+```
+
+[`examples/values-k3s.yaml`](examples/values-k3s.yaml) is a
 complete values file for a home-lab cluster. Every option is documented in
 [`charts/cubeharbor/values.yaml`](charts/cubeharbor/values.yaml).
 
@@ -493,7 +505,8 @@ around the tunnel and Access.
   forged `X-Forwarded-For` headers and spread password guesses over made-up addresses. With the
   tunnel on, the chart adds a NetworkPolicy (`dashboard.networkPolicy`) that admits only the
   cloudflared pods plus whatever you list in `dashboard.networkPolicy.allowFrom`. If the dashboard
-  also has an Ingress, add your ingress controller there (the chart refuses to render otherwise):
+  also has an Ingress or HTTPRoute, add your ingress controller or Gateway implementation there
+  (the chart refuses to render otherwise):
 
   ```yaml
   dashboard:
