@@ -149,12 +149,9 @@ spec:
     matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
       app.kubernetes.io/component: dashboard
   template:
-    metadata:
-      labels: {{- include "cubeharbor.selector" . | nindent 8 }}
-        app.kubernetes.io/component: dashboard
-      annotations:
-        # Roll the dashboard when the site config changes.
-        checksum/site: {{ toYaml (.Values.dashboard.site | default dict) | sha256sum }}
+    {{- /* Roll the dashboard when the site config changes. */}}
+    {{- $checksum := dict "checksum/site" (toYaml (.Values.dashboard.site | default dict) | sha256sum) }}
+    metadata: {{- include "cubeharbor.podMetadata" (dict "root" . "component" "dashboard" "values" .Values.dashboard "annotations" $checksum) | nindent 6 }}
     spec:
       serviceAccountName: {{ $fullname }}-dashboard
       {{- include "cubeharbor.pod" . | nindent 6 }}

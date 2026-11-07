@@ -90,9 +90,7 @@ spec:
     matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
       app.kubernetes.io/component: operator
   template:
-    metadata:
-      labels: {{- include "cubeharbor.selector" . | nindent 8 }}
-        app.kubernetes.io/component: operator
+    metadata: {{- include "cubeharbor.podMetadata" (dict "root" . "component" "operator" "values" .Values.operator) | nindent 6 }}
     spec:
       serviceAccountName: {{ $fullname }}-operator
       {{- include "cubeharbor.pod" . | nindent 6 }}
