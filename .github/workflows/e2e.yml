@@ -48,6 +48,9 @@ jobs:
             --set minecraft.acceptEula=true --set minecraft.baseDomain=mc.test \
             --set minecraft.defaultCpuRequest=0 --set gateway.service.type=ClusterIP
 
+      - name: helm test
+        run: helm test cubeharbor -n "$NS" --logs --timeout 3m
+
       - name: CRD validation rules are accepted and enforced
         run: |
           # Installing the chart already proved the API server accepts the CRD's CEL rules

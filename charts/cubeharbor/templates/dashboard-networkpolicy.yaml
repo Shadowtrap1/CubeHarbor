@@ -21,13 +21,20 @@ spec:
     matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
       app.kubernetes.io/component: dashboard
   policyTypes: [Ingress]
-  {{- if or .Values.cloudflareTunnel.enabled $np.allowFrom }}
+  {{- if or .Values.cloudflareTunnel.enabled $np.allowFrom .Values.tests.enabled }}
   ingress:
     - from:
         {{- if .Values.cloudflareTunnel.enabled }}
         - podSelector:
             matchLabels: {{- include "cubeharbor.selector" . | nindent 14 }}
               app.kubernetes.io/component: cloudflared
+        {{- end }}
+        {{- if .Values.tests.enabled }}
+        # The `helm test` pod. Minecraft server pods can't match: the operator always labels
+        # them app.kubernetes.io/name=minecraft.
+        - podSelector:
+            matchLabels: {{- include "cubeharbor.selector" . | nindent 14 }}
+              app.kubernetes.io/component: test
         {{- end }}
         {{- with $np.allowFrom }}
         {{- toYaml . | nindent 8 }}

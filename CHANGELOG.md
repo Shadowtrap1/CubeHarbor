@@ -48,6 +48,12 @@ All notable changes are listed here. The format follows
   at least one admin). Passwords are hashed with argon2id instead of unsalted SHA-256. Users are
   kept in a new `<release>-dashboard-users` Secret, the only one the dashboard can read and write
   (`dashboard.manageUsers`, on by default; it now also works with `existingSecret`).
+* Chart: `helm test <release>` checks a fresh install: one pod fetches the dashboard's
+  `/healthz`, another sends the gateway a Minecraft status request and expects a server-list
+  reply (with `router.mode: mc-router`, it checks that mc-router accepts connections). The pods
+  use a pinned `busybox` (`tests.image`, mirror it for air-gapped clusters), meet Pod Security
+  "restricted", and are admitted by `dashboard.networkPolicy`. `tests.enabled: false` leaves
+  them out. The kind e2e job now runs `helm test`.
 * Dashboard: per-user **API tokens** (`Authorization: Bearer chb_...`), created and revoked on
   the Account page and stored hashed. A token has its user's role.
 * Chart: `dashboard.networkPolicy` admits only cloudflared and `allowFrom` (e.g. the ingress

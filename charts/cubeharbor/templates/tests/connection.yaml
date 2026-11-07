@@ -1,0 +1,50 @@
+{{- /* `helm test <release>`: checks that the dashboard answers its health check and that the
+Java router (gateway or mc-router) accepts players. Each test is a short-lived busybox pod. */ -}}
+{{- define "cubeharbor.testPod" -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "cubeharbor.fullname" .root }}-test-{{ .name }}
+  labels: {{- include "cubeharbor.labels" .root | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  {{- include "cubeharbor.pod" .root | nindent 2 }}
+  {{- include "cubeharbor.scheduling" .root.Values.tests | nindent 2 }}
+  containers:
+    - name: test
+      image: {{ .root.Values.tests.image | quote }}
+      imagePullPolicy: IfNotPresent
+      {{- include "cubeharbor.containerSecurity" .root | nindent 6 }}
+      command: [sh, -c]
+      args:
+        - {{ .script | quote }}
+      resources: {{- toYaml .root.Values.tests.resources | nindent 8 }}
+{{- end }}
+{{- if .Values.tests.enabled }}
+{{- $fullname := include "cubeharbor.fullname" . -}}
+{{- $mcr := eq .Values.router.mode "mc-router" -}}
+{{- if .Values.dashboard.enabled }}
+{{- $url := printf "http://%s-dashboard.%s.svc:%v/healthz" $fullname .Release.Namespace .Values.dashboard.service.port }}
+{{ include "cubeharbor.testPod" (dict "root" . "name" "dashboard" "script" (printf "set -eu; wget -q -T 10 -O- %s; echo; echo dashboard OK" $url)) }}
+---
+{{- end }}
+{{- if $mcr }}
+{{- /* mc-router closes connections for unknown hosts, so only check that it accepts them. */}}
+{{- $host := printf "%s-mc-router.%s.svc" $fullname .Release.Namespace }}
+{{ include "cubeharbor.testPod" (dict "root" . "name" "mc-router" "script" (printf "set -eu; nc -z -w 10 %s %v; echo mc-router OK" $host .Values.mcRouter.service.port)) }}
+{{- else if not .Values.gateway.hostNetwork }}
+{{- /* A Minecraft status request (handshake for host "helm-test", protocol 767, then a status
+request): the gateway answers with a server list entry, its own for unknown hosts. */}}
+{{- $host := printf "%s-gateway.%s.svc" $fullname .Release.Namespace }}
+{{- $script := printf `set -u
+out=$( (printf '\020\000\377\005\011helm-test\143\335\001\001\000'; sleep 3) | timeout 10 nc %s %v | tr -cd 'a-zA-Z0-9{}:,." _-' ) || true
+echo "$out"
+case "$out" in *'"version"'*) echo "gateway OK" ;; *) echo "no Minecraft status reply from the gateway"; exit 1 ;; esac` $host .Values.gateway.service.port }}
+{{ include "cubeharbor.testPod" (dict "root" . "name" "gateway" "script" $script) }}
+{{- end }}
+{{- end }}
