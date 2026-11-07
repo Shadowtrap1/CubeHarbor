@@ -96,6 +96,7 @@ spec:
           # Binding 25565 needs no privileges, but keep the option for <1024 ports.
           {{- end }}
           env:
+            - { name: LOG_FORMAT, value: {{ .Values.logFormat | default "text" | quote }} }
             - { name: LISTEN_ADDR, value: {{ include "cubeharbor.listen" (dict "root" . "port" 25565) | quote }} }
             - { name: HEALTH_ADDR, value: {{ include "cubeharbor.listen" (dict "root" . "port" 8081) | quote }} }
             - { name: PORTS_BIND, value: {{ .Values.network.bindAddress | default "0.0.0.0" | quote }} }

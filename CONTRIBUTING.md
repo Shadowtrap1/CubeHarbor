@@ -24,7 +24,9 @@ explains what each one does.
   `charts/cubeharbor/crds/minecraftservers.yaml`. CI fails when it's out of date.
 * **Dashboard look:** the stylesheet and scripts are in `crates/dashboard/assets/`. Options
   users can set are in `crates/dashboard/src/site.rs`; document new ones in `examples/site.yaml`.
-* **Chart values:** document new values in `charts/cubeharbor/values.yaml` with a `# --` comment.
+* **Chart values:** document new values in `charts/cubeharbor/values.yaml` with a `# --` comment,
+  and add them to `charts/cubeharbor/values.schema.json` (new top-level keys must be listed there,
+  or installs fail).
 * Add or update tests for behaviour changes. Most of the logic (compose parsing, port
   allocation, protocol, installer) is unit-testable without a cluster.
 * Add a line to `CHANGELOG.md` under "Unreleased".

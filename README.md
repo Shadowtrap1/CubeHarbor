@@ -195,6 +195,7 @@ else, the setting to change is in [`charts/cubeharbor/values.yaml`](charts/cubeh
 | Private registry / air-gapped | `image.registry`, `imagePullSecrets` (also used by server pods) and `mcRouter.image`. Modpacks still download from Modrinth/CurseForge/Mojang, so allow egress or use `cache.enabled` |
 | Dedicated or tainted game nodes | `serverPods.nodeSelector`, `serverPods.tolerations`, `serverPods.affinity`, `serverPods.priorityClassName`. One server can also set its own `spec.nodeSelector` (merged, the server wins), `spec.tolerations` (added to the chart's), `spec.affinity` and `spec.priorityClassName` (both replace the chart's); see [`examples/minecraftserver.yaml`](examples/minecraftserver.yaml) |
 | ARM64 (Raspberry Pi, Graviton, Ampere) | Defaults. Images are built for `linux/amd64` and `linux/arm64`. Lower `minecraft.defaultCpuRequest` on small nodes |
+| Log collectors (Loki, Elasticsearch, Cloud Logging) | `logFormat: json`: the operator, gateway and dashboard log one JSON object per line. Server pods take `LOG_FORMAT: json` in a server's `env` (only cubeharbor's own lines; the Minecraft log stays text) |
 | Shared cluster / one namespace | `minecraft.watchNamespace` and `dashboard.allowedNamespaces` limit what cubeharbor sees and touches |
 | Many players | `gateway.replicas: 2+` (a PodDisruptionBudget is added) with `gateway.topologySpreadConstraints`. Servers scale individually through `resources.memory`/`cpu` |
 

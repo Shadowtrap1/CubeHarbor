@@ -6,6 +6,7 @@ pub mod crd;
 pub mod defaults;
 pub mod health;
 pub mod java;
+pub mod logging;
 pub mod plan;
 pub mod protocol;
 pub mod rcon;
