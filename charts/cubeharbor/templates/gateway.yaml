@@ -112,7 +112,7 @@ spec:
             - { name: minecraft, containerPort: 25565, protocol: TCP }
             - { name: health, containerPort: 8081, protocol: TCP }
           readinessProbe:
-            httpGet: { path: /healthz, port: health }
+            httpGet: { path: /readyz, port: health }
           livenessProbe:
             httpGet: { path: /healthz, port: health }
             periodSeconds: 20

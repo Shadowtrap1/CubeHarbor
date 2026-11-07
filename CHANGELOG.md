@@ -13,6 +13,13 @@ All notable changes are listed here. The format follows
   server's tolerations are added to the chart's `serverPods.tolerations`; its affinity and
   priority class replace `serverPods.affinity` / `serverPods.priorityClassName`. Re-apply the
   chart's CRD (`kubectl apply -f charts/cubeharbor/crds/`) to use them.
+* Gateway: Prometheus metrics at `/metrics` and a readiness endpoint `/readyz` on the health
+  port (8081): open/accepted/rejected/routed connections, connections answered while a server
+  is offline, unknown hostnames, wake requests, routes and forwarded ports. The chart's readiness
+  probe now uses `/readyz`.
+* Gateway: graceful shutdown. On `SIGTERM` it reports not ready, keeps accepting for 5 seconds
+  (`SHUTDOWN_DELAY_SECS`), then stops accepting and waits up to 20 seconds
+  (`DRAIN_TIMEOUT_SECS`) for open connections before exiting.
 * Optional Cloudflare DNS updates for home installs with a changing public IP
   (`cloudflareDdns.enabled`, off by default). The operator looks up its public IPv4 every
   `interval` (5m). When it changed, and once an hour to repair edits made in Cloudflare, it
@@ -85,6 +92,8 @@ All notable changes are listed here. The format follows
 
 ### Fixed
 
+* Gateway: a failed `accept()` on the Minecraft port (e.g. out of file descriptors under a
+  connection flood) no longer exits the gateway; it's logged and retried.
 * Dashboard: **Delete with data** now reports an error when the world volume
   (`data-<name>-0`) can't be deleted, instead of redirecting as if it was. A volume that's
   already gone is still fine, and the message includes the `kubectl` command to delete it.

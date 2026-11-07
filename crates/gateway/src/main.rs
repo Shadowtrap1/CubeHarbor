@@ -9,16 +9,18 @@ mod minecraft;
 mod pipe;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
 use cubeharbor_core::MinecraftServer;
 use cubeharbor_core::cidr;
+use cubeharbor_core::health::{Metrics, Response};
 use futures::StreamExt;
 use kube::runtime::reflector::{self, Store};
 use kube::runtime::{WatchStreamExt, watcher};
 use kube::{Api, Client};
-use tokio::io::AsyncWriteExt;
 
 #[derive(Parser, Debug, Clone)]
 #[command(version, about = "cubeharbor Minecraft gateway")]
@@ -59,6 +61,42 @@ pub struct Config {
     /// Concurrent UDP sessions per forwarded port.
     #[arg(long, env = "MAX_UDP_SESSIONS", default_value_t = 4096)]
     pub max_udp_sessions: usize,
+    /// On SIGTERM, keep accepting for this long while `/readyz` reports not ready, so load
+    /// balancers and kube-proxy stop sending new players here first.
+    #[arg(long, env = "SHUTDOWN_DELAY_SECS", default_value_t = 5)]
+    pub shutdown_delay_secs: u64,
+    /// Then wait up to this long for open connections to finish before exiting. Keep
+    /// SHUTDOWN_DELAY_SECS + DRAIN_TIMEOUT_SECS below the pod's terminationGracePeriodSeconds (30).
+    #[arg(long, env = "DRAIN_TIMEOUT_SECS", default_value_t = 20)]
+    pub drain_timeout_secs: u64,
+}
+
+/// Counters for `/metrics`.
+#[derive(Default)]
+pub struct Stats {
+    /// Minecraft connections accepted on the routing port.
+    pub accepted: AtomicU64,
+    /// Dropped because MAX_CONNECTIONS was reached.
+    pub rejected: AtomicU64,
+    /// Relayed to a running server.
+    pub routed: AtomicU64,
+    /// Answered by the gateway because the server wasn't running (sleeping, starting, ...).
+    pub offline: AtomicU64,
+    /// No server (and no default server) for the requested hostname.
+    pub unknown_host: AtomicU64,
+    /// Wake requests written for sleeping servers, and those that failed.
+    pub wakes: AtomicU64,
+    pub wake_errors: AtomicU64,
+    /// Forwarded-port TCP connections dropped because MAX_FORWARD_CONNECTIONS was reached.
+    pub forward_rejected: AtomicU64,
+    /// Allocated ports currently being forwarded.
+    pub forwarded_ports: AtomicU64,
+    /// Set on SIGTERM: `/readyz` fails and the listeners shut down.
+    pub draining: AtomicBool,
+}
+
+pub fn inc(c: &AtomicU64) {
+    c.fetch_add(1, Ordering::Relaxed);
 }
 
 #[derive(Clone)]
@@ -71,6 +109,7 @@ pub struct State {
     pub forward_connections: Arc<tokio::sync::Semaphore>,
     /// Last wake request per server, so join spam doesn't hammer the API server.
     pub wakes: Arc<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>>,
+    pub stats: Arc<Stats>,
 }
 
 impl State {
@@ -115,21 +154,124 @@ async fn main() -> Result<()> {
         connections: Arc::new(tokio::sync::Semaphore::new(cfg.max_connections.max(1))),
         forward_connections: Arc::new(tokio::sync::Semaphore::new(cfg.max_forward_connections.max(1))),
         wakes: Default::default(),
+        stats: Default::default(),
         cfg: cfg.clone(),
     });
-    tokio::spawn(forward::run(state.clone()));
-    tokio::spawn(health(cfg.health.clone()));
-    minecraft::listen(state).await
+    let forwarding = tokio::spawn(forward::run(state.clone()));
+    let probe_state = state.clone();
+    cubeharbor_core::health::spawn(cfg.health.clone(), move |path| endpoint(&probe_state, path));
+
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let listening = tokio::spawn(minecraft::listen(state.clone(), stop_rx));
+    tokio::select! {
+        r = listening => return r?,
+        _ = cubeharbor_core::health::shutdown_signal() => {}
+    }
+
+    // Graceful shutdown: report not ready and keep serving while the pod is removed from the
+    // Service endpoints, then stop accepting and let open connections finish (up to the drain
+    // timeout). Players still connected after that are disconnected when the process exits.
+    tracing::info!("shutting down: not ready, still accepting for {}s", cfg.shutdown_delay_secs);
+    state.stats.draining.store(true, Ordering::Relaxed);
+    tokio::time::sleep(Duration::from_secs(cfg.shutdown_delay_secs)).await;
+    let _ = stop_tx.send(true);
+    forwarding.abort();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(cfg.drain_timeout_secs);
+    loop {
+        let (mc, fwd) = open_connections(&state);
+        if mc + fwd == 0 {
+            tracing::info!("all connections closed, exiting");
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            tracing::info!("drain timeout reached, closing {} connection(s)", mc + fwd);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Ok(())
 }
 
-async fn health(addr: String) {
-    let Ok(listener) = tokio::net::TcpListener::bind(&addr).await else {
-        tracing::error!("cannot bind health endpoint {addr}");
-        return;
-    };
-    while let Ok((mut s, _)) = listener.accept().await {
-        tokio::spawn(async move {
-            let _ = s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok").await;
-        });
+/// Open (Minecraft, forwarded TCP) connections.
+fn open_connections(state: &State) -> (usize, usize) {
+    let mc = state.cfg.max_connections.max(1).saturating_sub(state.connections.available_permits());
+    let fwd = state.cfg.max_forward_connections.max(1).saturating_sub(state.forward_connections.available_permits());
+    (mc, fwd)
+}
+
+/// HEALTH_ADDR: `/healthz` (alive), `/readyz` (alive and not shutting down), `/metrics`.
+fn endpoint(state: &State, path: &str) -> Response {
+    match path {
+        "/healthz" | "/livez" => Response::text(200, "ok"),
+        "/readyz" if state.stats.draining.load(Ordering::Relaxed) => Response::text(503, "shutting down"),
+        "/readyz" => Response::text(200, "ok"),
+        "/metrics" => Response::metrics(metrics(state)),
+        _ => Response::not_found(),
+    }
+}
+
+fn metrics(state: &State) -> String {
+    let s = &state.stats;
+    let get = |c: &AtomicU64| c.load(Ordering::Relaxed);
+    let servers = state.servers.state();
+    let routes: usize = servers.iter().map(|m| m.status.as_ref().map_or(0, |st| st.hostnames.len())).sum();
+    let (mc_open, fwd_open) = open_connections(state);
+    let mut m = Metrics::new();
+    m.gauge("cubeharbor_gateway_connections_open", "Minecraft connections currently open.", mc_open as f64)
+        .gauge("cubeharbor_gateway_connections_max", "MAX_CONNECTIONS.", state.cfg.max_connections as f64)
+        .counter("cubeharbor_gateway_connections_accepted_total", "Minecraft connections accepted.", get(&s.accepted))
+        .counter("cubeharbor_gateway_connections_rejected_total", "Minecraft connections dropped at MAX_CONNECTIONS.", get(&s.rejected))
+        .counter("cubeharbor_gateway_connections_routed_total", "Connections relayed to a running server.", get(&s.routed))
+        .counter(
+            "cubeharbor_gateway_connections_offline_total",
+            "Connections answered by the gateway because the server wasn't running.",
+            get(&s.offline),
+        )
+        .counter("cubeharbor_gateway_connections_unknown_host_total", "Connections for a hostname no server claims.", get(&s.unknown_host))
+        .counter("cubeharbor_gateway_wakes_total", "Wake requests written for sleeping servers.", get(&s.wakes))
+        .counter("cubeharbor_gateway_wake_errors_total", "Wake requests that could not be written.", get(&s.wake_errors))
+        .gauge("cubeharbor_gateway_forward_connections_open", "TCP connections open on forwarded ports.", fwd_open as f64)
+        .counter(
+            "cubeharbor_gateway_forward_connections_rejected_total",
+            "Forwarded-port connections dropped at MAX_FORWARD_CONNECTIONS.",
+            get(&s.forward_rejected),
+        )
+        .gauge("cubeharbor_gateway_forwarded_ports", "Allocated ports being forwarded.", get(&s.forwarded_ports) as f64)
+        .gauge("cubeharbor_gateway_servers", "MinecraftServers the gateway knows.", servers.len() as f64)
+        .gauge("cubeharbor_gateway_routes", "Hostnames routed to a server.", routes as f64)
+        .gauge("cubeharbor_gateway_draining", "1 while shutting down.", if s.draining.load(Ordering::Relaxed) { 1.0 } else { 0.0 });
+    m.finish()
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn readiness_and_metrics() {
+        let client = Client::try_from(kube::Config::new("http://127.0.0.1:1".parse().unwrap())).unwrap();
+        let (store, _writer) = reflector::store();
+        let cfg = Config::parse_from(["gw", "--max-connections", "10", "--max-forward-connections", "5"]);
+        let state = State {
+            servers: store,
+            client,
+            trusted_proxies: vec![],
+            connections: Arc::new(tokio::sync::Semaphore::new(10)),
+            forward_connections: Arc::new(tokio::sync::Semaphore::new(5)),
+            wakes: Default::default(),
+            stats: Default::default(),
+            cfg,
+        };
+        let _held = state.connections.clone().try_acquire_many_owned(3).unwrap();
+        inc(&state.stats.wakes);
+        assert_eq!(endpoint(&state, "/readyz").status, 200);
+        let body = endpoint(&state, "/metrics").body;
+        assert!(body.contains("\ncubeharbor_gateway_connections_open 3\n"), "{body}");
+        assert!(body.contains("\ncubeharbor_gateway_wakes_total 1\n"), "{body}");
+        assert_eq!(open_connections(&state), (3, 0));
+        state.stats.draining.store(true, Ordering::Relaxed);
+        assert_eq!(endpoint(&state, "/readyz").status, 503);
+        assert_eq!(endpoint(&state, "/healthz").status, 200, "liveness stays up while draining");
+        assert_eq!(endpoint(&state, "/nope").status, 404);
     }
 }

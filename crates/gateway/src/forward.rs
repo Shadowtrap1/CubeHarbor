@@ -63,6 +63,7 @@ pub async fn run(state: Arc<State>) {
             };
             active.insert(key, (target, handle));
         }
+        state.stats.forwarded_ports.store(active.len() as u64, Ordering::Relaxed);
     }
 }
 
@@ -78,6 +79,7 @@ async fn tcp(bind: String, target: Target, state: Arc<State>) {
     while let Ok((mut client, peer)) = listener.accept().await {
         // Its own budget: a flood here can't exhaust sockets, nor take slots from the Minecraft port.
         let Ok(permit) = state.forward_connections.clone().try_acquire_owned() else {
+            crate::inc(&state.stats.forward_rejected);
             tracing::debug!("{peer} -> {bind}: connection limit reached, dropping");
             continue;
         };

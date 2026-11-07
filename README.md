@@ -205,6 +205,21 @@ What has been checked: unit tests, and `helm template` for each row above. What 
 installs on most of these platforms. If you run one, please
 [open an issue](https://github.com/Shadowtrap1/cubeharbor/issues) to say whether it worked.
 
+### Health checks and metrics
+
+The gateway serves these on port 8081 (the pod's `health` port), plain HTTP:
+
+| Path | Meaning |
+|---|---|
+| `/healthz` | The process is alive (liveness probe) |
+| `/readyz` | Ready for players: `503` once it's shutting down (readiness probe) |
+| `/metrics` | Prometheus metrics: `cubeharbor_gateway_connections_open`, `..._accepted_total`, `..._rejected_total` (at `maxConnections`), `..._routed_total`, `..._offline_total` (answered by the gateway for a sleeping/starting server), `..._unknown_host_total`, `cubeharbor_gateway_wakes_total`, `cubeharbor_gateway_routes`, `cubeharbor_gateway_forwarded_ports` and more |
+
+On `SIGTERM` (a rolling update or a drained node) the gateway reports not ready, keeps accepting
+for `SHUTDOWN_DELAY_SECS` (5) while it's removed from the Service, then stops accepting and waits
+up to `DRAIN_TIMEOUT_SECS` (20) for open connections to close. Players still connected after that
+are disconnected; run `gateway.replicas: 2+` so they can rejoin right away.
+
 ### Upgrading and uninstalling
 
 ```sh
