@@ -8,6 +8,11 @@ All notable changes are listed here. The format follows
 
 ### Added
 
+* CRD: per-server scheduling with `spec.tolerations`, `spec.affinity` and
+  `spec.priorityClassName`, e.g. to put one big modpack on a tainted high-memory node. The
+  server's tolerations are added to the chart's `serverPods.tolerations`; its affinity and
+  priority class replace `serverPods.affinity` / `serverPods.priorityClassName`. Re-apply the
+  chart's CRD (`kubectl apply -f charts/cubeharbor/crds/`) to use them.
 * Optional Cloudflare DNS updates for home installs with a changing public IP
   (`cloudflareDdns.enabled`, off by default). The operator looks up its public IPv4 every
   `interval` (5m). When it changed, and once an hour to repair edits made in Cloudflare, it

@@ -390,16 +390,27 @@ pub fn statefulset(mcs: &MinecraftServer, inp: PodInputs<'_>) -> Result<Stateful
     if !pod_defaults.image_pull_secrets.is_empty() {
         pod["imagePullSecrets"] = json!(pod_defaults.image_pull_secrets);
     }
-    if !pod_defaults.tolerations.is_empty() {
-        pod["tolerations"] = json!(pod_defaults.tolerations);
+    // The server's tolerations are added to the operator-wide ones; its affinity and priority
+    // class replace them.
+    let mut tolerations = pod_defaults.tolerations.clone();
+    for t in &spec.tolerations {
+        let t = serde_json::to_value(t)?;
+        if !tolerations.contains(&t) {
+            tolerations.push(t);
+        }
     }
-    if let Some(a) = &pod_defaults.affinity {
+    if !tolerations.is_empty() {
+        pod["tolerations"] = json!(tolerations);
+    }
+    if let Some(a) = &spec.affinity {
+        pod["affinity"] = serde_json::to_value(a)?;
+    } else if let Some(a) = &pod_defaults.affinity {
         pod["affinity"] = a.clone();
     }
     if !pod_defaults.topology_spread_constraints.is_empty() {
         pod["topologySpreadConstraints"] = json!(pod_defaults.topology_spread_constraints);
     }
-    if let Some(p) = &pod_defaults.priority_class_name {
+    if let Some(p) = spec.priority_class_name.as_ref().or(pod_defaults.priority_class_name.as_ref()) {
         pod["priorityClassName"] = json!(p);
     }
     if let Some(r) = &pod_defaults.runtime_class_name {
@@ -552,6 +563,55 @@ mod tests {
         let labels = &v["spec"]["template"]["metadata"]["labels"];
         assert_eq!(labels["team"], "mc");
         assert_eq!(labels["app.kubernetes.io/name"], "minecraft", "built-in labels win");
+    }
+
+    #[test]
+    fn server_scheduling_overrides() {
+        let (mut mcs, mut cfg) = sample();
+        cfg.server_pod = serde_json::from_str(
+            r#"{"tolerations":[{"key":"games","operator":"Exists","effect":"NoSchedule"}],
+                "affinity":{"nodeAffinity":{"preferredDuringSchedulingIgnoredDuringExecution":[
+                    {"weight":1,"preference":{"matchExpressions":[{"key":"pool","operator":"In","values":["games"]}]}}]}},
+                "priorityClassName":"game-servers"}"#,
+        )
+        .unwrap();
+        let build = |mcs: &MinecraftServer, cfg: &Config| {
+            let sts = statefulset(mcs, PodInputs { replicas: 1, image: cfg.image_for(21), plan_hash: "x".into(), existing_claims: None, cfg }).unwrap();
+            serde_json::to_value(&sts).unwrap()["spec"]["template"]["spec"].clone()
+        };
+
+        // Without per-server values the operator-wide ones apply.
+        let pod = build(&mcs, &cfg);
+        assert_eq!(pod["tolerations"].as_array().unwrap().len(), 1);
+        assert_eq!(pod["affinity"]["nodeAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"][0]["weight"], 1);
+        assert_eq!(pod["priorityClassName"], "game-servers");
+
+        mcs.spec = serde_json::from_value(json!({
+            "tolerations": [
+                {"key": "games", "operator": "Exists", "effect": "NoSchedule"},
+                {"key": "big", "operator": "Equal", "value": "true", "effect": "NoExecute"},
+            ],
+            "affinity": {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [
+                {"matchExpressions": [{"key": "size", "operator": "In", "values": ["xl"]}]}]}}},
+            "priorityClassName": "vip",
+        }))
+        .unwrap();
+        let pod = build(&mcs, &cfg);
+        let tol = pod["tolerations"].as_array().unwrap();
+        assert_eq!(tol.len(), 2, "tolerations are added, duplicates dropped: {tol:?}");
+        assert_eq!(tol[0]["key"], "games");
+        assert_eq!(tol[1]["key"], "big");
+        assert_eq!(tol[1]["value"], "true");
+        let aff = &pod["affinity"]["nodeAffinity"];
+        assert!(aff.get("preferredDuringSchedulingIgnoredDuringExecution").is_none(), "affinity is replaced, not merged");
+        assert_eq!(aff["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"][0]["key"], "size");
+        assert_eq!(pod["priorityClassName"], "vip");
+
+        // With no operator-wide values the server's own still apply.
+        cfg.server_pod = Default::default();
+        let pod = build(&mcs, &cfg);
+        assert_eq!(pod["tolerations"].as_array().unwrap().len(), 2);
+        assert_eq!(pod["priorityClassName"], "vip");
     }
 
     #[test]

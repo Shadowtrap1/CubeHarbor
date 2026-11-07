@@ -181,7 +181,7 @@ else, the setting to change is in [`charts/cubeharbor/values.yaml`](charts/cubeh
 | OpenShift | `podSecurityContext: {}` and `serverPods.securityContext: {}`, so the restricted SCC assigns UIDs |
 | Pod Security "restricted" namespaces | Defaults. Every pod, including the server pods, meets the restricted profile |
 | Private registry / air-gapped | `image.registry`, `imagePullSecrets` (also used by server pods) and `mcRouter.image`. Modpacks still download from Modrinth/CurseForge/Mojang, so allow egress or use `cache.enabled` |
-| Dedicated or tainted game nodes | `serverPods.nodeSelector`, `serverPods.tolerations`, `serverPods.affinity`, `serverPods.priorityClassName` |
+| Dedicated or tainted game nodes | `serverPods.nodeSelector`, `serverPods.tolerations`, `serverPods.affinity`, `serverPods.priorityClassName`. One server can also set its own `spec.nodeSelector` (merged, the server wins), `spec.tolerations` (added to the chart's), `spec.affinity` and `spec.priorityClassName` (both replace the chart's); see [`examples/minecraftserver.yaml`](examples/minecraftserver.yaml) |
 | ARM64 (Raspberry Pi, Graviton, Ampere) | Defaults. Images are built for `linux/amd64` and `linux/arm64`. Lower `minecraft.defaultCpuRequest` on small nodes |
 | Shared cluster / one namespace | `minecraft.watchNamespace` and `dashboard.allowedNamespaces` limit what cubeharbor sees and touches |
 | Many players | `gateway.replicas: 2+` (a PodDisruptionBudget is added) with `gateway.topologySpreadConstraints`. Servers scale individually through `resources.memory`/`cpu` |

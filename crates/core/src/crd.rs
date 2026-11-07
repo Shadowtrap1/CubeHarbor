@@ -120,6 +120,18 @@ pub struct MinecraftServerSpec {
 
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub node_selector: BTreeMap<String, String>,
+
+    /// Added to the operator-wide `serverPods.tolerations`, e.g. to run on tainted game nodes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
+
+    /// Replaces the operator-wide `serverPods.affinity` for this server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affinity: Option<k8s_openapi::api::core::v1::Affinity>,
+
+    /// Replaces the operator-wide `serverPods.priorityClassName` for this server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_class_name: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, JsonSchema, PartialEq, Eq, Hash)]
