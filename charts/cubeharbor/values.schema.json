@@ -44,6 +44,13 @@
         "type": "string"
       }
     },
+    "logFormat": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "description": "Log format of the operator, gateway and dashboard."
+    },
     "podSecurityContext": {
       "type": [
         "object",
