@@ -144,6 +144,13 @@ impl Metrics {
         self
     }
 
+    /// A summary without quantiles: `<name>_sum` and `<name>_count`.
+    pub fn summary(&mut self, name: &str, help: &str, sum: f64, count: u64) -> &mut Self {
+        self.header(name, "summary", help);
+        let _ = writeln!(self.0, "{name}_sum {sum}\n{name}_count {count}");
+        self
+    }
+
     /// One family with a sample per label set, e.g. `("phase", "Running")`.
     pub fn labeled<'a>(&mut self, name: &str, kind: &str, help: &str, samples: impl IntoIterator<Item = (&'a [(&'a str, &'a str)], f64)>) -> &mut Self {
         self.header(name, kind, help);

@@ -29,6 +29,7 @@ pub struct Ctx {
     pub cfg: Config,
     pub alloc_lock: Mutex<()>,
     pub gateway_sync: Notify,
+    pub stats: Arc<crate::metrics::Stats>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -55,7 +56,10 @@ pub async fn reconcile(mcs: Arc<MinecraftServer>, ctx: Arc<Ctx>) -> Result<Actio
     status.service = Some(format!("{name}.{ns}.svc"));
     status.hostnames = effective_hostnames(&name, &mcs.spec, ctx.cfg.base_domain());
 
-    match reconcile_inner(&mcs, &ctx, &ns, &name, &mut status).await {
+    let started = std::time::Instant::now();
+    let result = reconcile_inner(&mcs, &ctx, &ns, &name, &mut status).await;
+    ctx.stats.reconciled(started.elapsed(), result.is_ok());
+    match result {
         Ok(action) => {
             patch_status(&api, &name, &status).await?;
             ctx.gateway_sync.notify_one();

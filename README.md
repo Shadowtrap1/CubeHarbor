@@ -211,8 +211,10 @@ else, the setting to change is in [`charts/cubeharbor/values.yaml`](charts/cubeh
 | Shared cluster / one namespace | `minecraft.watchNamespace` and `dashboard.allowedNamespaces` limit what cubeharbor sees and touches |
 | Many players | `gateway.replicas: 2+` (a PodDisruptionBudget is added) with `gateway.topologySpreadConstraints`. Servers scale individually through `resources.memory`/`cpu` |
 
-The operator always runs as one replica, because it coordinates port allocation in-process.
-It's a light controller, so that isn't a bottleneck.
+Only one operator reconciles at a time, because it coordinates port allocation in-process. With
+`operator.replicas: 2` the others stand by: the active one holds a Lease (`<release>-operator`,
+renewed every 2 seconds) and a standby takes over within about 15 seconds if it dies, or at once
+when it shuts down normally. It's a light controller, so one active replica isn't a bottleneck.
 
 What has been checked: unit tests, and `helm template` for each row above. What hasn't: real
 installs on most of these platforms. If you run one, please
@@ -232,6 +234,13 @@ On `SIGTERM` (a rolling update or a drained node) the gateway reports not ready,
 for `SHUTDOWN_DELAY_SECS` (5) while it's removed from the Service, then stops accepting and waits
 up to `DRAIN_TIMEOUT_SECS` (20) for open connections to close. Players still connected after that
 are disconnected; run `gateway.replicas: 2+` so they can rejoin right away.
+
+The operator serves `/healthz`, `/readyz` and `/metrics` on port 8080 (its `health` port):
+`cubeharbor_operator_leader` (1 on the replica that reconciles), `..._reconciles_total`,
+`..._reconcile_errors_total`, `..._reconcile_duration_seconds`, `..._gateway_sync_errors_total`,
+and on the leader `cubeharbor_operator_servers{phase="Running"}` (one series per phase),
+`cubeharbor_operator_players_online` and `cubeharbor_operator_allocated_ports`. On `SIGTERM` it
+finishes the reconciles in flight and releases the Lease.
 
 ### Upgrading and uninstalling
 

@@ -280,8 +280,11 @@
         "replicas": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 1,
-          "description": "Must be 1: port allocation is coordinated in one process."
+          "description": "2 or more keeps a standby operator ready to take over; needs leaderElection."
+        },
+        "leaderElection": {
+          "type": "boolean",
+          "description": "Elect a leader with a Lease, so only one operator replica reconciles."
         },
         "resources": {
           "type": "object",

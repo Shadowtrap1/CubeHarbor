@@ -2,12 +2,15 @@
 
 mod config;
 mod dns;
+mod leader;
+mod metrics;
 mod ports;
 mod reconcile;
 mod resources;
 mod wake;
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -18,7 +21,6 @@ use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
 use kube::runtime::{Controller, watcher};
 use kube::{Api, Client};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, Notify};
 
 use crate::reconcile::{Ctx, error_policy, reconcile, sync_gateway_ports};
@@ -31,14 +33,36 @@ async fn main() -> Result<()> {
     let http = Http::new(cfg.curseforge_api_key.clone())?;
     tracing::info!("cubeharbor-operator {} starting (ports {})", env!("CARGO_PKG_VERSION"), cfg.port_range);
 
-    let health = cfg.health_addr.clone();
-    tokio::spawn(async move {
-        if let Err(e) = health_server(&health).await {
-            tracing::error!("health server: {e}");
-        }
-    });
+    let stats = Arc::new(metrics::Stats::default());
+    let probe_stats = stats.clone();
+    cubeharbor_core::health::spawn(cfg.health_addr.clone(), move |path| metrics::endpoint(&probe_stats, path));
 
-    let ctx = Arc::new(Ctx { client: client.clone(), http, cfg: cfg.clone(), alloc_lock: Mutex::new(()), gateway_sync: Notify::new() });
+    // Only one replica may reconcile: port allocation is serialised inside one process.
+    let elector = cfg.leader_election.then(|| {
+        let ns = if cfg.pod_namespace.is_empty() { cfg.gateway_namespace.clone() } else { cfg.pod_namespace.clone() };
+        let identity = identity(&cfg.pod_name);
+        tracing::info!("leader election on, Lease {ns}/{} as {identity}", cfg.leader_election_lease);
+        leader::Elector::new(client.clone(), &ns, &cfg.leader_election_lease, identity)
+    });
+    if let Some(e) = &elector {
+        tokio::select! {
+            _ = e.acquire() => tracing::info!("became the leader"),
+            _ = cubeharbor_core::health::shutdown_signal() => {
+                tracing::info!("shutting down before becoming the leader");
+                return Ok(());
+            }
+        }
+    }
+    stats.leader.store(true, Ordering::Relaxed);
+
+    let ctx = Arc::new(Ctx {
+        client: client.clone(),
+        http,
+        cfg: cfg.clone(),
+        alloc_lock: Mutex::new(()),
+        gateway_sync: Notify::new(),
+        stats: stats.clone(),
+    });
 
     // Gateway ports: debounce reconcile notifications, plus a periodic sweep that catches deletions.
     let sync_ctx = ctx.clone();
@@ -47,6 +71,7 @@ async fn main() -> Result<()> {
             let _ = tokio::time::timeout(Duration::from_secs(30), sync_ctx.gateway_sync.notified()).await;
             tokio::time::sleep(Duration::from_secs(2)).await;
             if let Err(e) = sync_gateway_ports(&sync_ctx).await {
+                sync_ctx.stats.gateway_sync_errors.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!("syncing gateway ports: {e:#}");
             }
         }
@@ -71,7 +96,10 @@ async fn main() -> Result<()> {
     };
     let owned = watcher::Config::default().labels(&format!("{}={}", cubeharbor_core::labels::MANAGED_BY, cubeharbor_core::labels::MANAGER));
 
-    Controller::new(servers, watcher::Config::default())
+    let controller = Controller::new(servers, watcher::Config::default());
+    let _ = stats.servers.set(controller.store());
+    // Stops on SIGTERM/SIGINT after the reconciles in flight finish.
+    let run = controller
         .owns(sts, owned.clone())
         .owns(svc, owned.clone())
         .owns(cm, owned.clone())
@@ -82,18 +110,35 @@ async fn main() -> Result<()> {
             if let Err(e) = res {
                 tracing::debug!("reconcile: {e}");
             }
-        })
-        .await;
+        });
+
+    match &elector {
+        None => run.await,
+        Some(e) => {
+            tokio::select! {
+                _ = run => {}
+                _ = e.hold() => {
+                    // Another replica may be reconciling already: stop at once rather than race it.
+                    tracing::error!("lost the leader Lease, exiting");
+                    std::process::exit(1);
+                }
+            }
+            e.release().await;
+        }
+    }
+    tracing::info!("stopped");
     Ok(())
 }
 
-/// Minimal liveness endpoint (`GET /healthz`).
-async fn health_server(addr: &str) -> Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    loop {
-        let (mut s, _) = listener.accept().await?;
-        tokio::spawn(async move {
-            let _ = s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok").await;
-        });
-    }
+/// The pod name, or the hostname (which is the pod name in Kubernetes), plus a random suffix so a
+/// restarted container never mistakes its predecessor's Lease for its own.
+fn identity(pod_name: &str) -> String {
+    let base = if pod_name.is_empty() { std::env::var("HOSTNAME").unwrap_or_else(|_| "cubeharbor-operator".into()) } else { pod_name.to_string() };
+    let suffix: String = {
+        use std::io::Read;
+        let mut b = [0u8; 4];
+        let _ = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b));
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    };
+    format!("{base}_{suffix}")
 }

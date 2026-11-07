@@ -58,8 +58,8 @@ The project README has a [table of settings per cluster type](https://github.com
 
 | Component | Kind | Notes |
 |---|---|---|
-| operator | Deployment, 1 replica | Reconciles `MinecraftServer` resources. Always exactly one replica (`Recreate`): it allocates public ports in-process, so there's no leader election to configure. A restart only pauses reconciling; running servers keep running. |
-| gateway | Deployment + LoadBalancer Service | Routes Java players by hostname on 25565, answers pings for sleeping servers and wakes them. Scales out with `gateway.replicas` (a PodDisruptionBudget is added above 1). The operator also manages a `<release>-gateway-ports` Service for allocated voice chat / Bedrock ports. |
+| operator | Deployment, 1 replica | Reconciles `MinecraftServer` resources. Only one replica reconciles at a time (it allocates public ports in-process): with `operator.replicas: 2+` the others stand by and take over the `<release>-operator` Lease within ~15s (`operator.leaderElection`, on by default). A restart only pauses reconciling; running servers keep running. Health and Prometheus metrics on port 8080 (`/healthz`, `/readyz`, `/metrics`). |
+| gateway | Deployment + LoadBalancer Service | Routes Java players by hostname on 25565, answers pings for sleeping servers and wakes them. Scales out with `gateway.replicas` (a PodDisruptionBudget is added above 1). The operator also manages a `<release>-gateway-ports` Service for allocated voice chat / Bedrock ports. Health and Prometheus metrics on port 8081 (`/healthz`, `/readyz`, `/metrics`); on `SIGTERM` it drains connections for up to 25s. |
 | dashboard | Deployment + ClusterIP Service | Web UI and API. Expose it with `dashboard.ingress`, `dashboard.httpRoute` or `cloudflareTunnel`, always over TLS. |
 | mc-router | Deployment | Only with `router.mode: mc-router`, instead of the gateway's hostname routing. |
 | cloudflared | Deployment | Only with `cloudflareTunnel.enabled`. |
@@ -172,7 +172,8 @@ the full details.
 | `cache.size` | `50Gi` |  |
 | `cache.storageClass` | `""` |  |
 | `cache.accessMode` | `ReadWriteMany` |  |
-| `operator.replicas` | `1` | Must be 1: port allocation is coordinated inside the operator process. |
+| `operator.replicas` | `1` | 2 or more keeps a standby ready to take over within ~15s. Needs leaderElection: only the replica holding the Lease reconciles (port allocation is coordinated inside one process). |
+| `operator.leaderElection` | `true` | Elect a leader with a coordination.k8s.io Lease named <release>-operator. With it on, upgrades roll (the new pod takes over when the old one releases the Lease); off = Recreate. |
 | `operator.resources.requests` | `{ cpu: 50m, memory: 64Mi }` |  |
 | `operator.resources.limits` | `{ memory: 256Mi }` |  |
 | `operator.nodeSelector` | `{}` |  |
