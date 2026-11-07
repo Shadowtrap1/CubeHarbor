@@ -1,0 +1,55 @@
+# Renders (almost) every optional template at once. Used by scripts/chart-check.sh in CI.
+minecraft:
+  acceptEula: true
+  baseDomain: mc.example.com
+  watchNamespace: games
+  storageClass: fast
+  ingressClass: nginx
+cache:
+  enabled: true
+curseforge:
+  apiKey: test-key
+imagePullSecrets: [{ name: regcred }]
+serverPods:
+  nodeSelector: { kubernetes.io/arch: amd64 }
+  tolerations: [{ key: games, operator: Exists, effect: NoSchedule }]
+  securityContext: {}
+network:
+  bindAddress: "::"
+  ipFamilyPolicy: PreferDualStack
+  ipFamilies: [IPv4, IPv6]
+gateway:
+  replicas: 2
+  service: { type: NodePort, nodePort: 30565 }
+  acceptProxyProtocol: true
+  trustedProxies: [10.0.0.0/8]
+dashboard:
+  password: correct-horse-battery
+  allowedNamespaces: [games, lobby]
+  trustedProxies: [10.42.0.0/16]
+  remotes: [{ name: games, url: "https://games.example.com/api/servers" }]
+  networkPolicy:
+    enabled: true
+    allowFrom:
+      - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+  ingress:
+    enabled: true
+    className: nginx
+    host: cubeharbor.example.com
+    annotations: { cert-manager.io/cluster-issuer: letsencrypt }
+    tls: [{ hosts: [cubeharbor.example.com], secretName: cubeharbor-dashboard-tls }]
+cloudflareDdns:
+  enabled: true
+  existingSecret: cf-api
+  zone: example.com
+cloudflareTunnel:
+  enabled: true
+  mode: local
+  existingSecret: cf-tunnel
+  hostname: dash.example.com
+  tunnelId: 00000000-0000-0000-0000-000000000000
+servers:
+  lobby:
+    loader: paper
+    version: "1.21.4"
+    resources: { memory: 4Gi }

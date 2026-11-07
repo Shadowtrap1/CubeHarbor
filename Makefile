@@ -18,9 +18,9 @@ images:
 push:
 	REGISTRY=$(REGISTRY) TAG=$(TAG) docker buildx bake --push
 
+# helm lint + template for every values combination (and kubeconform when installed).
 chart-lint:
-	helm lint charts/cubeharbor
-	helm template test charts/cubeharbor > /dev/null
+	scripts/chart-check.sh
 
 # Build + push every image from this machine with podman or docker ($(REGISTRY)/cubeharbor-*:<branch>).
 local:

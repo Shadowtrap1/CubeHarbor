@@ -1,0 +1,10 @@
+# mc-router routing, one watched namespace, the dashboard password from an existing Secret.
+router:
+  mode: mc-router
+minecraft:
+  watchNamespace: cubeharbor
+mcRouter:
+  service: { type: NodePort, nodePort: 30565 }
+dashboard:
+  existingSecret: my-dashboard
+  manageUsers: false

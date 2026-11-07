@@ -1,0 +1,9 @@
+# Bare metal without a load balancer, OpenShift-style security contexts, dashboard off.
+gateway:
+  hostNetwork: true
+  nodeSelector: { kubernetes.io/hostname: node-1 }
+podSecurityContext: {}
+serverPods:
+  securityContext: {}
+dashboard:
+  enabled: false

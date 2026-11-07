@@ -41,6 +41,12 @@ All notable changes are listed here. The format follows
   at least 12 characters). It's saved to the dashboard's Secret and logs out other sessions
   (`dashboard.allowPasswordChange`, on by default; off with `existingSecret`). The README now
   explains choosing your own password at install.
+* CI: a `chart-check` job (`scripts/chart-check.sh`, also `make chart-lint`) runs `helm lint
+  --strict` and validates the rendered manifests with kubeconform for Kubernetes 1.27 and 1.33,
+  with the default values, every `examples/values-*.yaml` and new `charts/cubeharbor/ci/*-values.yaml`
+  combinations (hostNetwork, mc-router, everything enabled). It also fails when the chart
+  references an image that `docker-bake.hcl` doesn't build, so a release can't publish a chart
+  pointing at a missing image. Releases now wait for it.
 
 ### Changed
 
