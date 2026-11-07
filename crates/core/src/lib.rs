@@ -4,6 +4,7 @@ pub mod cidr;
 pub mod compose;
 pub mod crd;
 pub mod defaults;
+pub mod health;
 pub mod java;
 pub mod logging;
 pub mod plan;

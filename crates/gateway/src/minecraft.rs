@@ -13,14 +13,33 @@ use kube::ResourceExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::State;
+use crate::{State, inc};
 
-pub async fn listen(state: Arc<State>) -> Result<()> {
+/// Accept and route connections until `stop` turns true (graceful shutdown). Connections already
+/// open keep running in their own tasks.
+pub async fn listen(state: Arc<State>, mut stop: tokio::sync::watch::Receiver<bool>) -> Result<()> {
     let listener = TcpListener::bind(&state.cfg.listen).await.with_context(|| format!("binding {}", state.cfg.listen))?;
     tracing::info!("routing Minecraft connections on {}", state.cfg.listen);
     loop {
-        let (stream, peer) = listener.accept().await?;
+        let accepted = tokio::select! {
+            a = listener.accept() => a,
+            _ = stop.wait_for(|s| *s) => {
+                tracing::info!("no longer accepting Minecraft connections");
+                return Ok(());
+            }
+        };
+        let (stream, peer) = match accepted {
+            Ok(a) => a,
+            // E.g. out of file descriptors: transient, and must not take the whole gateway down.
+            Err(e) => {
+                tracing::warn!("accepting a connection: {e}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+        inc(&state.stats.accepted);
         let Ok(permit) = state.connections.clone().try_acquire_owned() else {
+            inc(&state.stats.rejected);
             tracing::debug!("{peer}: connection limit reached, dropping");
             continue;
         };
@@ -59,6 +78,7 @@ async fn handle(state: Arc<State>, mut client: TcpStream, mut peer: SocketAddr) 
         .context("handshake timeout")??;
     let servers = state.servers.state();
     let Some(server) = route(&servers, &hs.host) else {
+        inc(&state.stats.unknown_host);
         tracing::info!("{peer}: no server for host `{}`", hs.host);
         return offline_reply(&mut client, &hs, &buf, "§cUnknown server", &format!("No server is configured for {}", hs.host)).await;
     };
@@ -84,6 +104,7 @@ async fn handle(state: Arc<State>, mut client: TcpStream, mut peer: SocketAddr) 
         upstream.write_all(&protocol::proxy_v2_header(peer, local)).await?;
     }
     upstream.write_all(&buf).await?;
+    inc(&state.stats.routed);
     crate::pipe::relay(&mut client, &mut upstream, state.idle_timeout()).await?;
     Ok(())
 }
@@ -179,6 +200,7 @@ async fn not_running(
     buf: &[u8],
     phase: Phase,
 ) -> Result<()> {
+    inc(&state.stats.offline);
     let sleeping = server.status.as_ref().is_some_and(|s| s.sleeping);
     let wake = sleeping && server.auto_wake();
     let (motd, kick) = match phase {
@@ -209,7 +231,10 @@ async fn not_running(
         let key = cubeharbor_core::wake::key(&server.namespace().unwrap_or_default(), &server.name_any());
         let patch = serde_json::json!({ "data": { key: ts } });
         if let Err(e) = api.patch(&state.cfg.wake_configmap, &PatchParams::default(), &Patch::Merge(&patch)).await {
+            inc(&state.stats.wake_errors);
             tracing::warn!("could not wake {}: {e}", server.name_any());
+        } else {
+            inc(&state.stats.wakes);
         }
     }
     offline_reply(client, hs, buf, motd, kick).await
