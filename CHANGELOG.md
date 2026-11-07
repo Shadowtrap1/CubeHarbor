@@ -8,6 +8,10 @@ All notable changes are listed here. The format follows
 
 ### Added
 
+* Chart: `metrics.enabled` adds ClusterIP Services for the gateway's and the operator's
+  `/metrics` (never on the public gateway Service), and `metrics.serviceMonitor.enabled` a
+  Prometheus Operator ServiceMonitor for them (`labels`, `interval`, `namespace`). Both off by
+  default.
 * CRD: per-server scheduling with `spec.tolerations`, `spec.affinity` and
   `spec.priorityClassName`, e.g. to put one big modpack on a tainted high-memory node. The
   server's tolerations are added to the chart's `serverPods.tolerations`; its affinity and

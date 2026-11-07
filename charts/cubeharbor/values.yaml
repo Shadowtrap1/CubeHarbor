@@ -14,6 +14,22 @@ commonLabels: {}
 # line, for log collectors).
 logFormat: text
 
+# -- Prometheus metrics. The gateway serves /metrics on its health port (8081) and the operator
+# on 8080 (counts only: no hostnames, IPs or server names). `enabled` adds ClusterIP
+# `<release>-gateway-metrics` / `<release>-operator-metrics` Services (never the public gateway
+# Service) for Prometheus to scrape.
+metrics:
+  enabled: false
+  serviceMonitor:
+    # -- Also create a Prometheus Operator ServiceMonitor (needs the monitoring.coreos.com CRDs).
+    enabled: false
+    # -- Namespace of the ServiceMonitor (release namespace when empty).
+    namespace: ""
+    # -- Extra labels, e.g. the `release: <name>` label your Prometheus selects ServiceMonitors by.
+    labels: {}
+    interval: 30s
+    scrapeTimeout: ""
+
 # -- Pod securityContext of the operator, gateway, dashboard and mc-router pods.
 # On OpenShift set this to {} so the restricted SCC assigns the UID.
 podSecurityContext:

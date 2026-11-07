@@ -57,3 +57,8 @@ servers:
     loader: paper
     version: "1.21.4"
     resources: { memory: 4Gi }
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    labels: { release: prometheus }

@@ -1,0 +1,50 @@
+{{- /* Prometheus scraping: ClusterIP Services for the gateway's and the operator's /metrics (on
+their health ports, never on the public gateway Service) and an optional ServiceMonitor. */ -}}
+{{- $m := .Values.metrics -}}
+{{- if $m.enabled }}
+{{- $fullname := include "cubeharbor.fullname" . -}}
+{{- range list (dict "component" "operator" "port" 8080) (dict "component" "gateway" "port" 8081) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-{{ .component }}-metrics
+  labels: {{- include "cubeharbor.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ .component }}
+    cubeharbor.dev/metrics: "true"
+spec:
+  type: ClusterIP
+  {{- include "cubeharbor.ipFamily" $ | nindent 2 }}
+  selector: {{- include "cubeharbor.selector" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ .component }}
+  ports:
+    - { name: metrics, port: {{ .port }}, targetPort: health, protocol: TCP }
+{{- end }}
+{{- if $m.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullname }}
+  {{- with $m.serviceMonitor.namespace }}
+  namespace: {{ . }}
+  {{- end }}
+  labels: {{- include "cubeharbor.labels" . | nindent 4 }}
+    {{- range $k, $v := $m.serviceMonitor.labels }}
+    {{ $k }}: {{ toString $v | quote }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  selector:
+    matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
+      cubeharbor.dev/metrics: "true"
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ $m.serviceMonitor.interval }}
+      {{- with $m.serviceMonitor.scrapeTimeout }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
+{{- end }}
+{{- end }}
