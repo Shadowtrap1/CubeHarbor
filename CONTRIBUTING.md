@@ -26,7 +26,8 @@ explains what each one does.
   users can set are in `crates/dashboard/src/site.rs`; document new ones in `examples/site.yaml`.
 * **Chart values:** document new values in `charts/cubeharbor/values.yaml` with a `# --` comment,
   and add them to `charts/cubeharbor/values.schema.json` (new top-level keys must be listed there,
-  or installs fail).
+  or installs fail). Then run `make chart-readme` to update the values table in
+  `charts/cubeharbor/README.md` (CI checks it).
 * Add or update tests for behaviour changes. Most of the logic (compose parsing, port
   allocation, protocol, installer) is unit-testable without a cluster.
 * Add a line to `CHANGELOG.md` under "Unreleased".

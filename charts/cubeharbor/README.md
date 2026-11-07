@@ -124,6 +124,7 @@ the full details.
 | `image.pullPolicy` | `IfNotPresent` |  |
 | `imagePullSecrets` | `[]` |  |
 | `commonLabels` | `{}` | Labels added to every object the chart creates and to its pods (e.g. team, cost center). app.kubernetes.io/* and helm.sh/chart keys are ignored here: the chart sets those itself. |
+| `logFormat` | `text` | Log format of the operator, gateway and dashboard: "text" or "json" (one JSON object per line, for log collectors). |
 | `podSecurityContext` |  | Pod securityContext of the operator, gateway, dashboard and mc-router pods. On OpenShift set this to {} so the restricted SCC assigns the UID. |
 | `podSecurityContext.runAsNonRoot` | `true` |  |
 | `podSecurityContext.runAsUser` | `65532` |  |
@@ -289,5 +290,12 @@ the full details.
 | `cloudflareTunnel.priorityClassName` | `""` |  |
 | `cloudflareTunnel.podLabels` | `{}` | Extra labels and annotations on the cloudflared pods (e.g. for log shippers or service meshes). |
 | `cloudflareTunnel.podAnnotations` | `{}` |  |
+| `tests` |  | `helm test <release>` pods: the dashboard answers /healthz, and the gateway answers a Minecraft status request (mc-router: accepts connections). Nothing runs until you call helm test. |
+| `tests.enabled` | `true` |  |
+| `tests.image` | `busybox:1.37.0` | Any image with busybox `sh`, `wget`, `nc`, `timeout` and `tr`. Mirror it for air-gapped clusters. |
+| `tests.resources.requests` | `{ cpu: 10m, memory: 16Mi }` |  |
+| `tests.resources.limits` | `{ memory: 32Mi }` |  |
+| `tests.nodeSelector` | `{}` |  |
+| `tests.tolerations` | `[]` |  |
 | `servers` | `{}` | MinecraftServer resources to create with the release (full spec, see examples/). |
 <!-- values:end -->
