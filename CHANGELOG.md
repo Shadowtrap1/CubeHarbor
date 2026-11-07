@@ -123,6 +123,16 @@ All notable changes are listed here. The format follows
 
 * Gateway: a failed `accept()` on the Minecraft port (e.g. out of file descriptors under a
   connection flood) no longer exits the gateway; it's logged and retried.
+* Operator: a failed reconcile (a Kubernetes API hiccup, Modrinth unreachable while
+  re-resolving a changed spec, a port conflict) no longer marks a **running, sleeping or stopped**
+  server `Error`. The phase is kept and the error is shown in the status message. Before, the
+  gateway turned players away from a healthy server, and stopped waking a sleeping one, until
+  the next successful reconcile.
+* Operator: resolving versions gives up after 2 minutes instead of holding a server's reconcile
+  for up to the download timeout (10 minutes per request) when a version API hangs.
+* Operator: port allocation starts from the server's allocations as the API server has them,
+  not the possibly older watch-cache copy, so a server can't be moved to a different voice
+  chat / Bedrock port (and restarted) by a reconcile that ran on a stale copy.
 * Dashboard: **Delete with data** now reports an error when the world volume
   (`data-<name>-0`) can't be deleted, instead of redirecting as if it was. A volume that's
   already gone is still fine, and the message includes the `kubectl` command to delete it.
