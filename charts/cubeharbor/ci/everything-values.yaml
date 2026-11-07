@@ -38,6 +38,10 @@ dashboard:
     host: cubeharbor.example.com
     annotations: { cert-manager.io/cluster-issuer: letsencrypt }
     tls: [{ hosts: [cubeharbor.example.com], secretName: cubeharbor-dashboard-tls }]
+  httpRoute:
+    enabled: true
+    parentRefs: [{ name: public, namespace: gateway-system, sectionName: https }]
+    hostnames: [dash.example.com]
 cloudflareDdns:
   enabled: true
   existingSecret: cf-api
