@@ -22,9 +22,19 @@ struct Target {
     owner: String,
 }
 
+/// A listener task that stops when dropped, so aborting [`run`] (graceful shutdown) also closes
+/// every forwarded port instead of leaving the listeners running detached.
+struct Listener(JoinHandle<()>);
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Reconcile listeners with allocations every few seconds.
 pub async fn run(state: Arc<State>) {
-    let mut active: HashMap<(u16, Protocol), (Target, JoinHandle<()>)> = HashMap::new();
+    let mut active: HashMap<(u16, Protocol), (Target, Listener)> = HashMap::new();
     let mut tick = tokio::time::interval(Duration::from_secs(3));
     loop {
         tick.tick().await;
@@ -42,13 +52,8 @@ pub async fn run(state: Arc<State>) {
                 );
             }
         }
-        active.retain(|key, (target, handle)| {
-            let keep = desired.get(key) == Some(target) && !handle.is_finished();
-            if !keep {
-                handle.abort();
-            }
-            keep
-        });
+        // Dropping a Listener aborts its task.
+        active.retain(|key, (target, listener)| desired.get(key) == Some(target) && !listener.0.is_finished());
         for (key, target) in desired {
             if active.contains_key(&key) {
                 continue;
@@ -61,7 +66,7 @@ pub async fn run(state: Arc<State>) {
                 Protocol::Tcp => tokio::spawn(tcp(bind, t, state.clone())),
                 Protocol::Udp => tokio::spawn(udp(bind, t, state.cfg.max_udp_sessions.max(1))),
             };
-            active.insert(key, (target, handle));
+            active.insert(key, (target, Listener(handle)));
         }
         state.stats.forwarded_ports.store(active.len() as u64, Ordering::Relaxed);
     }
@@ -183,5 +188,18 @@ mod bind_tests {
         assert_eq!(super::join_host_port("0.0.0.0", 25600), "0.0.0.0:25600");
         assert_eq!(super::join_host_port("::", 25600), "[::]:25600");
         assert_eq!(super::join_host_port("[::]", 25600), "[::]:25600");
+    }
+
+    #[tokio::test]
+    async fn dropping_a_listener_stops_it() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let l = super::Listener(tokio::spawn(async move {
+            let _tx = tx;
+            std::future::pending::<()>().await;
+        }));
+        drop(l);
+        // The task, and the sender it owns, is dropped once the abort lands.
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(2), rx).await;
+        assert!(closed.is_ok(), "listener task kept running");
     }
 }
