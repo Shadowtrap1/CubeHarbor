@@ -6,6 +6,12 @@ cubeharbor is installed.
 {{- $port := ternary .Values.mcRouter.service.port .Values.gateway.service.port $mcr | int }}
 {{ if $mcr }}mc-router{{ else }}Gateway{{ end }} (Java players connect here, port {{ $port }}):
   kubectl -n {{ .Release.Namespace }} get svc {{ $fullname }}-{{ ternary "mc-router" "gateway" $mcr }}
+{{- $svcType := ternary .Values.mcRouter.service.type .Values.gateway.service.type $mcr }}
+{{- if and (eq $svcType "LoadBalancer") (not (and (not $mcr) .Values.gateway.hostNetwork)) }}
+  EXTERNAL-IP stays <pending> if the cluster has no load balancer (kind, minikube, bare metal):
+  set {{ ternary "mcRouter" "gateway" $mcr }}.service.type=NodePort{{ if not $mcr }} or gateway.hostNetwork=true{{ end }}, or try it locally with
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullname }}-{{ ternary "mc-router" "gateway" $mcr }} {{ $port }}
+{{- end }}
 {{- if .Values.minecraft.baseDomain }}
 {{- if .Values.cloudflareDdns.enabled }}
   Cloudflare DNS: the operator keeps {{ join ", " (.Values.cloudflareDdns.records | default (list (printf "*.%s" .Values.minecraft.baseDomain))) }} pointed at your public IPv4

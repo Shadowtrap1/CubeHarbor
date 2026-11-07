@@ -12,3 +12,49 @@ sources: [https://github.com/Shadowtrap1/cubeharbor]
 maintainers:
   - name: Shadowtrap1
     url: https://github.com/Shadowtrap1
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/operator: "true"
+  artifacthub.io/operatorCapabilities: Basic Install
+  # 0.x: the MinecraftServer API (v1alpha1) and values may still change between minor versions.
+  artifacthub.io/prerelease: "true"
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://github.com/Shadowtrap1/cubeharbor#readme
+    - name: Changelog
+      url: https://github.com/Shadowtrap1/cubeharbor/blob/main/CHANGELOG.md
+    - name: Examples
+      url: https://github.com/Shadowtrap1/cubeharbor/tree/main/examples
+  artifacthub.io/crds: |
+    - kind: MinecraftServer
+      version: v1alpha1
+      name: minecraftservers.cubeharbor.dev
+      displayName: Minecraft server
+      description: A Minecraft server (vanilla, Paper, Fabric, Forge, NeoForge, modpacks...) that the operator installs, routes and puts to sleep when idle.
+  artifacthub.io/crdsExamples: |
+    - apiVersion: cubeharbor.dev/v1alpha1
+      kind: MinecraftServer
+      metadata:
+        name: lobby
+      spec:
+        version: "1.21.4"
+        loader: paper
+        acceptEula: true
+        resources:
+          memory: 4Gi
+  # The release workflow rewrites the registry and tag of these to the published ones.
+  artifacthub.io/images: |
+    - name: operator
+      image: ghcr.io/shadowtrap1/cubeharbor-operator:0.1.0
+    - name: gateway
+      image: ghcr.io/shadowtrap1/cubeharbor-gateway:0.1.0
+    - name: dashboard
+      image: ghcr.io/shadowtrap1/cubeharbor-dashboard:0.1.0
+    - name: server-java8
+      image: ghcr.io/shadowtrap1/cubeharbor-server:0.1.0-java8
+    - name: server-java17
+      image: ghcr.io/shadowtrap1/cubeharbor-server:0.1.0-java17
+    - name: server-java21
+      image: ghcr.io/shadowtrap1/cubeharbor-server:0.1.0-java21
+    - name: server-java25
+      image: ghcr.io/shadowtrap1/cubeharbor-server:0.1.0-java25

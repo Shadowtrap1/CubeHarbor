@@ -75,14 +75,26 @@ using the Java version Mojang publishes for the resolved Minecraft version.
 
 ## Quick start
 
+```sh
+helm install cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor -n cubeharbor --create-namespace
+```
+
+That's the whole install: no values are required. The notes it prints show how to reach the
+dashboard (user `admin`, generated password) and the gateway, and `helm test cubeharbor -n
+cubeharbor` checks that both answer. The [chart README](charts/cubeharbor/README.md) lists every
+value.
+
 **You need:** Kubernetes 1.27+ (k3s, kind, a managed cluster, ...), Helm 3.8+, a default
-StorageClass for world volumes, and a LoadBalancer implementation (cloud LB, MetalLB, k3s
-ServiceLB) or `gateway.hostNetwork: true`. You also have to accept the
-[Minecraft EULA](https://aka.ms/MinecraftEULA).
+StorageClass for world volumes, and for players outside the cluster a LoadBalancer
+implementation (cloud LB, MetalLB, k3s ServiceLB), `gateway.service.type: NodePort` or
+`gateway.hostNetwork: true` (see [Cluster compatibility](#cluster-compatibility)). Every server
+must accept the [Minecraft EULA](https://aka.ms/MinecraftEULA).
+
+A typical setup adds a domain, the EULA for all servers and a CurseForge key:
 
 ```sh
-# 1. Install the chart (images come from ghcr.io/shadowtrap1)
-helm install cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor --version 0.1.0 \
+# 1. Install the chart (images come from ghcr.io/shadowtrap1; add --version x.y.z to pin one)
+helm install cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor \
   -n cubeharbor --create-namespace \
   --set minecraft.acceptEula=true \
   --set minecraft.baseDomain=mc.example.com \
@@ -208,11 +220,18 @@ installs on most of these platforms. If you run one, please
 
 ### Upgrading and uninstalling
 
+Helm installs the CRD from the chart's `crds/` directory on the first install only, and never
+upgrades or deletes it. Apply the new version's CRD first, then upgrade:
+
 ```sh
-# Helm installs CRDs once and never updates them. Apply the new CRD first:
-kubectl apply --server-side -f charts/cubeharbor/crds/minecraftservers.yaml
-helm upgrade cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor --version <new> -n cubeharbor --reuse-values
+helm pull oci://ghcr.io/shadowtrap1/charts/cubeharbor --version <new> --untar -d /tmp/cubeharbor
+kubectl apply --server-side -f /tmp/cubeharbor/cubeharbor/crds/
+helm upgrade cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor --version <new> -n cubeharbor --reset-then-reuse-values
 ```
+
+`--reset-then-reuse-values` (Helm 3.14+) keeps your settings and picks up defaults for values
+the new version added. Plain `--reuse-values` keeps the old chart's defaults too, so new
+templates can fail on missing values; on older Helm, pass your values file with `-f` instead.
 
 `helm uninstall cubeharbor -n cubeharbor` removes the operator, gateway and dashboard. Servers
 you created yourself and all world volumes stay (servers defined under `servers:` in the Helm
@@ -239,7 +258,7 @@ which behind a home router is a LAN address.)
 # (the "Edit zone DNS" template)
 kubectl -n cubeharbor create secret generic cubeharbor-cloudflare-api --from-literal=apiToken=<token>
 
-helm upgrade cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor -n cubeharbor --reuse-values \
+helm upgrade cubeharbor oci://ghcr.io/shadowtrap1/charts/cubeharbor -n cubeharbor --reset-then-reuse-values \
   --set cloudflareDdns.enabled=true \
   --set cloudflareDdns.existingSecret=cubeharbor-cloudflare-api \
   --set cloudflareDdns.zone=example.com

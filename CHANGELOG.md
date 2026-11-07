@@ -71,6 +71,14 @@ All notable changes are listed here. The format follows
   controller) to the dashboard. It's on by default with `cloudflareTunnel`, so other pods
   (including Minecraft servers running third-party plugins) can't forge `X-Forwarded-For` from
   inside `dashboard.trustedProxies` to dodge the per-client login limit.
+* Chart: a chart README (`charts/cubeharbor/README.md`, shown on Artifact Hub) with a
+  zero-values quickstart, requirements, what gets installed, upgrade (CRD) and uninstall steps,
+  and a values table generated from `values.yaml` (`make chart-readme`). `Chart.yaml` has Artifact
+  Hub annotations (CRD, example, images, links); the release job points the image list at the
+  published registry and version. The top-level README now leads with the one-command
+  `helm install`, and NOTES explain a `<pending>` gateway address on clusters without a load
+  balancer. Upgrade instructions use `--reset-then-reuse-values` (Helm 3.14+): plain
+  `--reuse-values` keeps the old chart's defaults, so values added by a new version are missing.
 * Dashboard: an **Account** page to change the login password (current password required,
   at least 12 characters). It's saved to the dashboard's Secret and logs out other sessions
   (`dashboard.allowPasswordChange`, on by default; off with `existingSecret`). The README now

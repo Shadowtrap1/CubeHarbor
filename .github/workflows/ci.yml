@@ -84,5 +84,8 @@ jobs:
           echo "$TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
           # Images default to this repository's registry, and the tag to the chart's appVersion.
           sed -i "s|^  registry: .*|  registry: ghcr.io/$owner|" charts/cubeharbor/values.yaml
+          # Artifact Hub's image list (artifacthub.io/images) names the images this release pushed.
+          old=$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' charts/cubeharbor/Chart.yaml)
+          sed -i "s#image: ghcr.io/shadowtrap1/\(cubeharbor-[a-z]*\):$old#image: ghcr.io/$owner/\1:$version#" charts/cubeharbor/Chart.yaml
           helm package charts/cubeharbor --version "$version" --app-version "$version" -d /tmp/chart
           helm push "/tmp/chart/cubeharbor-$version.tgz" "oci://ghcr.io/$owner/charts"
