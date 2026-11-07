@@ -106,6 +106,7 @@ spec:
             - { name: SERVER_POD_DEFAULTS, value: {{ include "cubeharbor.serverPodDefaults" . | quote }} }
             - { name: GATEWAY_IP_FAMILY_POLICY, value: {{ .Values.network.ipFamilyPolicy | quote }} }
             - { name: GATEWAY_IP_FAMILIES, value: {{ join "," (.Values.network.ipFamilies | default list) | quote }} }
+            - { name: LOG_FORMAT, value: {{ .Values.logFormat | default "text" | quote }} }
             - { name: RUST_LOG, value: {{ printf "%s,kube=warn" .Values.operator.logLevel | quote }} }
             - { name: SERVER_IMAGE, value: {{ printf "%s/cubeharbor-server" .Values.image.registry | quote }} }
             - { name: SERVER_IMAGE_TAG, value: {{ include "cubeharbor.tag" . | quote }} }

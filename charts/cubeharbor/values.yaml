@@ -10,6 +10,10 @@ imagePullSecrets: []
 # app.kubernetes.io/* and helm.sh/chart keys are ignored here: the chart sets those itself.
 commonLabels: {}
 
+# -- Log format of the operator, gateway and dashboard: "text" or "json" (one JSON object per
+# line, for log collectors).
+logFormat: text
+
 # -- Pod securityContext of the operator, gateway, dashboard and mc-router pods.
 # On OpenShift set this to {} so the restricted SCC assigns the UID.
 podSecurityContext:

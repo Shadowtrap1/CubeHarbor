@@ -25,9 +25,7 @@ use crate::reconcile::{Ctx, error_policy, reconcile, sync_gateway_ports};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,kube=warn".into()))
-        .init();
+    cubeharbor_core::logging::init("info,kube=warn", true);
     let cfg = config::Config::load()?;
     let client = Client::try_default().await?;
     let http = Http::new(cfg.curseforge_api_key.clone())?;
