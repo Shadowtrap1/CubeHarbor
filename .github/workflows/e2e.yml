@@ -4,7 +4,7 @@ name: e2e
 # from the unit tests.
 on:
   push:
-    branches: [main]
+    branches: [main, experimental]
   pull_request:
 
 permissions:
