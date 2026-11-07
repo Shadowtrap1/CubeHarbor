@@ -129,8 +129,10 @@ fn split_addr(addr: &str, default_port: u16) -> Result<(String, u16)> {
 }
 
 /// Join a host and port for `TcpStream::connect`, bracketing IPv6 literals.
+/// Any host with a ':' is bracketed (DNS names can't contain one), so a scoped literal
+/// such as `fe80::1%2`, which `Ipv6Addr` doesn't parse, still connects.
 fn join_addr(host: &str, port: u16) -> String {
-    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+    if host.contains(':') {
         format!("[{host}]:{port}")
     } else {
         format!("{host}:{port}")
@@ -206,5 +208,8 @@ mod tests {
     fn join_addr_brackets_v6() {
         assert_eq!(join_addr("::1", 25565), "[::1]:25565");
         assert_eq!(join_addr("host", 25565), "host:25565");
+        assert_eq!(join_addr("fe80::1%2", 25565), "[fe80::1%2]:25565");
+        let (h, p) = split_addr("[fe80::1%2]:25570", 25565).unwrap();
+        assert_eq!(join_addr(&h, p), "[fe80::1%2]:25570");
     }
 }
