@@ -106,6 +106,9 @@ All notable changes are listed here. The format follows
 
 ### Security
 
+* Chart: mc-router (`router.mode: mc-router`) no longer enables its HTTP API on port 8080.
+  That API is unauthenticated and can add or replace routes, so any pod in the cluster could
+  have redirected a hostname's players to a server of its choosing. Nothing used it.
 * Gateway: no longer allowed to patch MinecraftServers. Wake-ups go through a `<release>-wake`
   ConfigMap, the only object the gateway can write, and the operator applies them. A
   compromised gateway can no longer change any server's spec.

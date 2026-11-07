@@ -77,7 +77,6 @@ spec:
           env:
             - { name: KUBE_NAMESPACE, value: {{ $ns | quote }} }
             - { name: PORT, value: "25565" }
-            - { name: API_BINDING, value: ":8080" }
             - { name: AUTO_SCALE_UP, value: {{ .Values.mcRouter.autoScaleUp | quote }} }
             {{- with .Values.mcRouter.connectionRateLimit }}
             - { name: CONNECTION_RATE_LIMIT, value: {{ . | quote }} }
@@ -87,7 +86,6 @@ spec:
             {{- end }}
           ports:
             - { name: minecraft, containerPort: 25565, protocol: TCP }
-            - { name: api, containerPort: 8080, protocol: TCP }
           readinessProbe:
             tcpSocket: { port: minecraft }
           livenessProbe:
