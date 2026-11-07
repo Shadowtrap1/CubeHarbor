@@ -20,3 +20,15 @@ spec:
   autoSleep:
     idleMinutes: 15
   ops: [Steve]
+  # Optional scheduling for this server only. nodeSelector is merged with the chart's
+  # serverPods.nodeSelector and tolerations are added to serverPods.tolerations; affinity and
+  # priorityClassName replace serverPods.affinity / serverPods.priorityClassName.
+  # nodeSelector: { pool: games }
+  # tolerations:
+  #   - { key: dedicated, operator: Equal, value: minecraft, effect: NoSchedule }
+  # affinity:
+  #   nodeAffinity:
+  #     requiredDuringSchedulingIgnoredDuringExecution:
+  #       nodeSelectorTerms:
+  #         - matchExpressions: [{ key: node.kubernetes.io/instance-type, operator: In, values: [c7i.2xlarge] }]
+  # priorityClassName: game-servers

@@ -1570,6 +1570,7 @@ checksum = "ab0d13801242174b1f3966907c3f32039f2d6b36c7ce82c61225d66ed5d1eb70"
 dependencies = [
  "base64 0.22.1",
  "jiff",
+ "schemars",
  "serde",
  "serde_json",
 ]
