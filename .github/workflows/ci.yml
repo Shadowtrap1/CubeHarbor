@@ -33,10 +33,14 @@ jobs:
       - uses: azure/setup-helm@v5
       - uses: docker/setup-buildx-action@v4
       - name: Install kubeconform
-        env: { KUBECONFORM_VERSION: v0.7.0 }
+        env:
+          KUBECONFORM_VERSION: v0.7.0
+          # From the release's CHECKSUMS file; update both together.
+          KUBECONFORM_SHA256: c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3
         run: |
-          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/$KUBECONFORM_VERSION/kubeconform-linux-amd64.tar.gz" \
-            | sudo tar -xz -C /usr/local/bin kubeconform
+          curl -fsSLo /tmp/kubeconform.tar.gz "https://github.com/yannh/kubeconform/releases/download/$KUBECONFORM_VERSION/kubeconform-linux-amd64.tar.gz"
+          echo "$KUBECONFORM_SHA256  /tmp/kubeconform.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
       - run: scripts/chart-check.sh
 
   images:
