@@ -44,6 +44,8 @@ Pin a version with `--version <x.y.z>` (see the
   ServiceLB). Without one (kind, minikube, bare metal), the gateway's `EXTERNAL-IP` stays
   `<pending>`: use `gateway.service.type=NodePort` or `gateway.hostNetwork=true`, or
   `kubectl port-forward svc/cubeharbor-gateway 25565` to try it locally.
+  `helm install --wait` also waits for that address, so leave out `--wait` (or change the
+  Service type) on such clusters.
 * No particular CNI or ingress controller. The NetworkPolicies the chart creates
   (`minecraft.rconNetworkPolicy`, `dashboard.networkPolicy`) are simply not enforced by CNIs
   without NetworkPolicy support.
