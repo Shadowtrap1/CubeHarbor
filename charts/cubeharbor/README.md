@@ -244,11 +244,17 @@ the full details.
 | `dashboard.networkPolicy.allowFrom` | `[]` | More NetworkPolicyPeers allowed in: your ingress controller (required when dashboard.ingress is enabled), or another cubeharbor release in the cluster that lists this dashboard in its `remotes`. No cubeharbor component calls the dashboard itself. |
 | `dashboard.service.type` | `ClusterIP` |  |
 | `dashboard.service.port` | `80` |  |
+| `dashboard.ingress` |  | Ingress for the dashboard. Serve it over TLS: passwords and the session cookie cross this connection. With cert-manager, add an issuer annotation and a tls entry, e.g. With dashboard.networkPolicy on, also list the ingress controller in networkPolicy.allowFrom. |
 | `dashboard.ingress.enabled` | `false` |  |
-| `dashboard.ingress.className` | `""` |  |
+| `dashboard.ingress.className` | `""` | IngressClass (cluster default when empty), e.g. nginx, traefik. |
 | `dashboard.ingress.host` | `cubeharbor.example.com` |  |
 | `dashboard.ingress.annotations` | `{}` |  |
 | `dashboard.ingress.tls` | `[]` |  |
+| `dashboard.httpRoute` |  | Gateway API HTTPRoute for the dashboard, as an alternative to the Ingress. Needs the Gateway API CRDs (gateway.networking.k8s.io/v1) and a Gateway you run. TLS is terminated by the Gateway's HTTPS listener (with cert-manager: the cert-manager.io/cluster-issuer annotation goes on the Gateway, not here); set cookieSecure: true when it serves HTTPS. |
+| `dashboard.httpRoute.enabled` | `false` |  |
+| `dashboard.httpRoute.parentRefs` | `[]` | The Gateway (and listener) to attach to. Required, e.g. [{ name: public, namespace: gateway-system, sectionName: https }] |
+| `dashboard.httpRoute.hostnames` | `[]` | Hostnames to match, e.g. [cubeharbor.example.com] (empty = every hostname of the listener). Servers can't claim these with `expose: ingress`. |
+| `dashboard.httpRoute.annotations` | `{}` |  |
 | `dashboard.resources.requests` | `{ cpu: 20m, memory: 32Mi }` |  |
 | `dashboard.resources.limits` | `{ memory: 256Mi }` |  |
 | `dashboard.nodeSelector` | `{}` |  |
