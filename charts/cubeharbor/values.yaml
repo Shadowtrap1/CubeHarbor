@@ -339,6 +339,18 @@ cloudflareTunnel:
   topologySpreadConstraints: []
   priorityClassName: ""
 
+# -- `helm test <release>` pods: the dashboard answers /healthz, and the gateway answers a
+# Minecraft status request (mc-router: accepts connections). Nothing runs until you call helm test.
+tests:
+  enabled: true
+  # -- Any image with busybox `sh`, `wget`, `nc`, `timeout` and `tr`. Mirror it for air-gapped clusters.
+  image: busybox:1.37.0
+  resources:
+    requests: { cpu: 10m, memory: 16Mi }
+    limits: { memory: 32Mi }
+  nodeSelector: {}
+  tolerations: []
+
 # -- MinecraftServer resources to create with the release (full spec, see examples/).
 servers: {}
 #  lobby:
