@@ -13,6 +13,9 @@ All notable changes are listed here. The format follows
   server's tolerations are added to the chart's `serverPods.tolerations`; its affinity and
   priority class replace `serverPods.affinity` / `serverPods.priorityClassName`. Re-apply the
   chart's CRD (`kubectl apply -f charts/cubeharbor/crds/`) to use them.
+* JSON logs: `LOG_FORMAT=json` (chart: `logFormat: json`) makes the operator, gateway, dashboard,
+  installer and runner write one JSON object per line instead of text, for log collectors.
+  `RUST_LOG` still picks the levels.
 * Optional Cloudflare DNS updates for home installs with a changing public IP
   (`cloudflareDdns.enabled`, off by default). The operator looks up its public IPv4 every
   `interval` (5m). When it changed, and once an hour to repair edits made in Cloudflare, it

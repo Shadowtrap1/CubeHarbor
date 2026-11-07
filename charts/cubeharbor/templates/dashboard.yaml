@@ -162,6 +162,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "cubeharbor.containerSecurity" . | nindent 10 }}
           env:
+            - { name: LOG_FORMAT, value: {{ .Values.logFormat | default "text" | quote }} }
             - { name: LISTEN_ADDR, value: {{ include "cubeharbor.listen" (dict "root" . "port" 8080) | quote }} }
             - name: DASHBOARD_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ $secretName }}, key: password } }

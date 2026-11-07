@@ -5,6 +5,7 @@ pub mod compose;
 pub mod crd;
 pub mod defaults;
 pub mod java;
+pub mod logging;
 pub mod plan;
 pub mod protocol;
 pub mod rcon;

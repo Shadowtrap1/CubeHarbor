@@ -391,9 +391,7 @@ fn router(state: Arc<AppState>) -> Router {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,kube=warn".into()))
-        .init();
+    cubeharbor_core::logging::init("info,kube=warn", true);
     let cfg = Config::parse();
     site::install(site::Site::load(cfg.site_config.as_deref())?);
     let client = Client::try_default().await?;

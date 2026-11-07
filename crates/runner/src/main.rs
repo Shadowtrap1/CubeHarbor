@@ -53,7 +53,7 @@ async fn main() {
             }
         }
     }
-    tracing_subscriber::fmt().with_target(false).init();
+    cubeharbor_core::logging::init("info", false);
     match run().await {
         Ok(code) => std::process::exit(code),
         Err(e) => {
