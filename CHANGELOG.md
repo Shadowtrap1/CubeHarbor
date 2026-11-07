@@ -38,6 +38,14 @@ All notable changes are listed here. The format follows
   (`dashboard.manageUsers`, on by default; it now also works with `existingSecret`).
 * Dashboard: per-user **API tokens** (`Authorization: Bearer chb_...`), created and revoked on
   the Account page and stored hashed. A token has its user's role.
+* Chart: `values.schema.json`, so mistakes fail at `helm install`/`upgrade` time with a clear
+  message instead of rendering something broken: unknown top-level keys (typos like
+  `dashbaord`), wrong types, and invalid enums (`router.mode`, Service `type`,
+  `externalTrafficPolicy`, `image.pullPolicy`, `cloudflareTunnel.mode`/`protocol`, IP families),
+  plus `minecraft.portRange` and `cloudflareDdns.interval` formats and `operator.replicas: 1`.
+  Nested objects stay open, so Kubernetes fields (affinity, tolerations, securityContext, server
+  specs) pass through unchanged. Use `--set-string` for a `dashboard.password` that looks like a
+  number.
 * Chart: `dashboard.networkPolicy` admits only cloudflared and `allowFrom` (e.g. the ingress
   controller) to the dashboard. It's on by default with `cloudflareTunnel`, so other pods
   (including Minecraft servers running third-party plugins) can't forge `X-Forwarded-For` from
