@@ -12,8 +12,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
+{{- /* Label values must be strings (cost: 1 would be rejected). Keys the chart sets itself are
+     skipped, so they can't become duplicate YAML keys. */}}
+{{- range $k, $v := .Values.commonLabels }}
+{{- if not (or (hasPrefix "app.kubernetes.io/" $k) (eq $k "helm.sh/chart")) }}
+{{ $k }}: {{ toString $v | quote }}
+{{- end }}
 {{- end }}
 {{- end -}}
 
@@ -22,9 +26,15 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
      commonLabels, then podLabels. Annotations: the chart's own checksums plus podAnnotations. */}}
 {{- define "cubeharbor.podMetadata" -}}
 {{- $labels := merge (dict "app.kubernetes.io/component" .component) (fromYaml (include "cubeharbor.selector" .root)) (.root.Values.commonLabels | default dict) (.values.podLabels | default dict) -}}
-labels: {{- toYaml $labels | nindent 2 }}
+labels:
+{{- range $k, $v := $labels }}
+  {{ $k }}: {{ toString $v | quote }}
+{{- end }}
 {{- with merge (dict) (.annotations | default dict) (.values.podAnnotations | default dict) }}
-annotations: {{- toYaml . | nindent 2 }}
+annotations:
+{{- range $k, $v := . }}
+  {{ $k }}: {{ toString $v | quote }}
+{{- end }}
 {{- end }}
 {{- end -}}
 
