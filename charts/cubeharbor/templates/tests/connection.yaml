@@ -42,7 +42,7 @@ spec:
 request): the gateway answers with a server list entry, its own for unknown hosts. */}}
 {{- $host := printf "%s-gateway.%s.svc" $fullname .Release.Namespace }}
 {{- $script := printf `set -u
-out=$( (printf '\020\000\377\005\011helm-test\143\335\001\001\000'; sleep 3) | timeout 10 nc %s %v | tr -cd '[:print:]' ) || true
+out=$( (printf '\020\000\377\005\011helm-test\143\335\001\001\000'; sleep 3) | timeout 10 nc %s %v | tr -cd 'a-zA-Z0-9{}:,." _-' ) || true
 echo "$out"
 case "$out" in *'"version"'*) echo "gateway OK" ;; *) echo "no Minecraft status reply from the gateway"; exit 1 ;; esac` $host .Values.gateway.service.port }}
 {{ include "cubeharbor.testPod" (dict "root" . "name" "gateway" "script" $script) }}
