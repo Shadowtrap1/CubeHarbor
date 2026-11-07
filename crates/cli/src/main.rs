@@ -105,11 +105,27 @@ fn strip_formats(v: &mut serde_json::Value) {
     }
 }
 
+/// Split `host[:port]`, `[v6]:port`, `[v6]` or a bare IPv6 address into host and port.
+/// The host comes back without brackets.
 fn split_addr(addr: &str, default_port: u16) -> (String, u16) {
+    if let Some(rest) = addr.strip_prefix('[') {
+        if let Some((h, tail)) = rest.split_once(']') {
+            let port = tail.strip_prefix(':').and_then(|p| p.parse().ok()).unwrap_or(default_port);
+            return (h.to_string(), port);
+        }
+    }
+    if addr.matches(':').count() > 1 {
+        return (addr.to_string(), default_port); // bare IPv6, no port
+    }
     match addr.rsplit_once(':') {
         Some((h, p)) if p.parse::<u16>().is_ok() => (h.to_string(), p.parse().unwrap()),
         _ => (addr.to_string(), default_port),
     }
+}
+
+/// Join a host and port for `TcpStream::connect`, bracketing IPv6 literals.
+fn join_addr(host: &str, port: u16) -> String {
+    if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") }
 }
 
 #[tokio::main]
@@ -131,7 +147,7 @@ async fn main() -> Result<()> {
         Cmd::Ping { address, host: vhost } => {
             let (host, port) = split_addr(&address, cubeharbor_core::crd::MINECRAFT_PORT);
             let vhost = vhost.unwrap_or_else(|| host.clone());
-            let s = cubeharbor_core::protocol::ping(&format!("{host}:{port}"), &vhost, port).await?;
+            let s = cubeharbor_core::protocol::ping(&join_addr(&host, port), &vhost, port).await?;
             let motd = cubeharbor_core::rcon::strip_formatting(&s.motd());
             let p = s.players.unwrap_or_default();
             let v = s.version.map(|v| format!("{} (protocol {})", v.name, v.protocol)).unwrap_or_default();
@@ -139,7 +155,7 @@ async fn main() -> Result<()> {
         }
         Cmd::Rcon { address, password, command } => {
             let (host, port) = split_addr(&address, cubeharbor_core::crd::RCON_PORT);
-            let mut r = cubeharbor_core::rcon::Rcon::connect(&format!("{host}:{port}"), &password).await?;
+            let mut r = cubeharbor_core::rcon::Rcon::connect(&join_addr(&host, port), &password).await?;
             println!("{}", cubeharbor_core::rcon::strip_formatting(&r.command(&command.join(" ")).await?));
         }
         Cmd::Apply { files, namespace, rehost } => {
@@ -156,4 +172,26 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_addr_forms() {
+        assert_eq!(split_addr("mc.example.com", 25565), ("mc.example.com".into(), 25565));
+        assert_eq!(split_addr("mc.example.com:25566", 25565), ("mc.example.com".into(), 25566));
+        assert_eq!(split_addr("10.0.0.1:1", 25565), ("10.0.0.1".into(), 1));
+        assert_eq!(split_addr("::1", 25565), ("::1".into(), 25565));
+        assert_eq!(split_addr("fe80::1:2", 25575), ("fe80::1:2".into(), 25575));
+        assert_eq!(split_addr("[::1]:25570", 25565), ("::1".into(), 25570));
+        assert_eq!(split_addr("[::1]", 25565), ("::1".into(), 25565));
+    }
+
+    #[test]
+    fn join_addr_brackets_v6() {
+        assert_eq!(join_addr("::1", 25565), "[::1]:25565");
+        assert_eq!(join_addr("host", 25565), "host:25565");
+    }
 }
