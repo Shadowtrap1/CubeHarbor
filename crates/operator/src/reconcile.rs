@@ -63,12 +63,40 @@ pub async fn reconcile(mcs: Arc<MinecraftServer>, ctx: Arc<Ctx>) -> Result<Actio
         }
         Err(e) => {
             tracing::warn!("{ns}/{name}: {e:#}");
-            status.phase = Phase::Error;
+            status.phase = phase_after_failure(status.phase);
             status.message = Some(format!("{e:#}"));
             patch_status(&api, &name, &status).await?;
             Ok(Action::requeue(Duration::from_secs(60)))
         }
     }
+}
+
+/// The phase to report when a reconcile fails. A failed reconcile (an API server hiccup, Modrinth
+/// down while re-resolving a changed spec, a port conflict) doesn't stop a pod that is already
+/// running, sleeping or stopped, so that phase is kept and the error goes into the message.
+/// Reporting `Error` instead made the gateway turn players away from a healthy server (and stop
+/// waking a sleeping one) until the next successful reconcile.
+fn phase_after_failure(previous: Phase) -> Phase {
+    match previous {
+        Phase::Running | Phase::Sleeping | Phase::Stopped => previous,
+        _ => Phase::Error,
+    }
+}
+
+/// Upper bound for resolving versions (several Modrinth/Mojang/loader requests). The HTTP
+/// client's own timeout is sized for multi-GB downloads, far too long to hold up a reconcile.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// This server's port allocations as the API server has them. The object handed to the
+/// reconciler comes from the watch cache and can be older than the allocation this operator just
+/// persisted; allocating from that stale copy could move the server to a different port.
+fn own_allocations(servers: &[MinecraftServer], ns: &str, name: &str, cached: &[PortAllocation]) -> Vec<PortAllocation> {
+    servers
+        .iter()
+        .find(|s| s.namespace().as_deref() == Some(ns) && s.name_any() == name)
+        .and_then(|s| s.status.as_ref())
+        .map(|st| st.allocations.clone())
+        .unwrap_or_else(|| cached.to_vec())
 }
 
 async fn patch_status(api: &Api<MinecraftServer>, name: &str, status: &MinecraftServerStatus) -> Result<(), Error> {
@@ -145,7 +173,11 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
     let resolve_hash = hash_json(&(&spec.version, spec.loader, &spec.loader_version, &spec.modpack, spec.jvm.java_version));
     if status.resolved.is_none() || status.resolved_hash.as_deref() != Some(resolve_hash.as_str()) {
         tracing::info!("{ns}/{name}: resolving versions");
-        let resolved = resolve::resolve(&ctx.http, spec).await.context("resolving server version")?;
+        let resolved = tokio::time::timeout(RESOLVE_TIMEOUT, resolve::resolve(&ctx.http, spec))
+            .await
+            .map_err(|_| anyhow::anyhow!("timed out after {}s", RESOLVE_TIMEOUT.as_secs()))
+            .and_then(|r| r)
+            .context("resolving server version")?;
         tracing::info!(
             "{ns}/{name}: Minecraft {} / {} / Java {}{}",
             resolved.minecraft_version,
@@ -191,6 +223,7 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
             tracing::warn!("{ns}/{name}: {}", conflicts.message());
             routing_conflict = Some(conflicts.message());
         }
+        let current = own_allocations(&servers.items, ns, name, &status.allocations);
         let mut used = Used::new();
         for other in servers {
             if other.namespace().as_deref() == Some(ns) && other.name_any() == name {
@@ -201,7 +234,7 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
                 used.insert((a.public_port, a.protocol), owner.clone());
             }
         }
-        status.allocations = ports::allocate(name, &spec.port_requests(), &status.allocations, &used, cfg.port_range())?;
+        status.allocations = ports::allocate(name, &spec.port_requests(), &current, &used, cfg.port_range())?;
         // Persist right away so concurrent reconciles see the allocation.
         mcs_api
             .patch_status(name, &PatchParams::default(), &Patch::Merge(json!({ "status": { "allocations": status.allocations } })))
@@ -530,6 +563,34 @@ mod prune_tests {
 mod tests {
     use super::*;
     use cubeharbor_core::crd::{PortAllocation, Protocol, Resolved};
+
+    #[test]
+    fn failures_keep_a_running_server_routable() {
+        for p in [Phase::Running, Phase::Sleeping, Phase::Stopped] {
+            assert_eq!(phase_after_failure(p), p);
+        }
+        for p in [Phase::Pending, Phase::Installing, Phase::Starting, Phase::Error] {
+            assert_eq!(phase_after_failure(p), Phase::Error);
+        }
+    }
+
+    #[test]
+    fn allocations_come_from_the_fresh_list() {
+        use cubeharbor_core::crd::MinecraftServerSpec;
+        let alloc = |port| PortAllocation { name: "voice".into(), protocol: Protocol::Udp, container_port: 24454, public_port: port };
+        let server = |ns: &str, name: &str, port: u16| {
+            let mut s = MinecraftServer::new(name, MinecraftServerSpec::default());
+            s.metadata.namespace = Some(ns.into());
+            s.status = Some(MinecraftServerStatus { allocations: vec![alloc(port)], ..Default::default() });
+            s
+        };
+        let listed = vec![server("mc", "lobby", 25601), server("mc", "atm", 25602), server("other", "atm", 25603)];
+        // The cache still has no allocation for mc/atm; the API server has 25602.
+        assert_eq!(own_allocations(&listed, "mc", "atm", &[]), vec![alloc(25602)]);
+        assert_eq!(own_allocations(&listed, "other", "atm", &[]), vec![alloc(25603)]);
+        // Not listed (yet): fall back to the cached status.
+        assert_eq!(own_allocations(&listed, "mc", "new", &[alloc(25604)]), vec![alloc(25604)]);
+    }
 
     #[test]
     fn status_patch_clears_empty_fields() {
