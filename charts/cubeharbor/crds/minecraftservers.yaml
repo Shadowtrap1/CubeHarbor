@@ -819,6 +819,15 @@ spec:
                     description: Send a PROXY protocol v2 header so the server sees real client IPs (Paper/Velocity/HAProxy-aware mods).
                     type: boolean
                 type: object
+              templateRef:
+                description: Inherit settings from a `MinecraftServerTemplate` in the same namespace. Anything set here wins.
+                nullable: true
+                properties:
+                  name:
+                    type: string
+                required:
+                - name
+                type: object
               tolerations:
                 description: Added to the operator-wide `serverPods.tolerations`, e.g. to run on tainted game nodes.
                 items:
@@ -1016,6 +1025,20 @@ spec:
                 default: false
                 description: Stopped by auto-sleep; the gateway clears this when a player joins.
                 type: boolean
+              template:
+                description: The template revision last applied, for servers with a `templateRef`.
+                nullable: true
+                properties:
+                  generation:
+                    description: '`metadata.generation` of the template.'
+                    format: int64
+                    nullable: true
+                    type: integer
+                  name:
+                    type: string
+                required:
+                - name
+                type: object
             type: object
         required:
         - spec

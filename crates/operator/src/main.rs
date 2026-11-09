@@ -7,6 +7,7 @@ mod metrics;
 mod ports;
 mod reconcile;
 mod resources;
+mod templates;
 mod wake;
 
 use std::sync::Arc;

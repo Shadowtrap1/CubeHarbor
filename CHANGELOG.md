@@ -8,6 +8,14 @@ All notable changes are listed here. The format follows
 
 ### Added
 
+* Server templates: a new `MinecraftServerTemplate` CRD holds shared settings that a
+  `MinecraftServer` inherits with `spec.templateRef`; settings on the server win. Edits reach
+  servers within about a minute and restart only those whose merged settings change. Existing
+  servers are unaffected. Apply the chart's CRDs (`kubectl apply --server-side -f
+  charts/cubeharbor/crds/`) to use them. The operator gets `get` on the new resource. See
+  "Server templates" in the README.
+* Docs: `docs/ROADMAP.md` (proposed features) and `docs/EXTENDING.md` (how to add a loader, CRD
+  field, dashboard route, metric or chart option, and the known scaling limits).
 * Chart: `metrics.enabled` adds ClusterIP Services for the gateway's and the operator's
   `/metrics` (never on the public gateway Service), and `metrics.serviceMonitor.enabled` a
   Prometheus Operator ServiceMonitor for them (`labels`, `interval`, `namespace`). Both off by

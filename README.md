@@ -261,7 +261,7 @@ templates can fail on missing values; on older Helm, pass your values file with 
 you created yourself and all world volumes stay (servers defined under `servers:` in the Helm
 values are part of the release and get deleted). Delete the servers with `kubectl delete mcs --all -A` (volumes
 `data-<name>-0` are still kept, remove them with `kubectl delete pvc` when you're sure). Then
-delete the CRD with `kubectl delete crd minecraftservers.cubeharbor.dev`.
+delete the CRDs with `kubectl delete crd minecraftservers.cubeharbor.dev minecraftservertemplates.cubeharbor.dev`.
 
 ## DNS setup
 
@@ -374,6 +374,69 @@ World data is not copied. Each warning names the old data folder and the new vol
 **Exporting.** Every server can be written back out as a cubeharbor compose file: use
 "Compose file" on a server page, "Export compose" for everything, or "Start from current
 servers" in the Compose tab to copy an existing server into a new one.
+
+## Server templates
+
+A `MinecraftServerTemplate` holds settings shared by many servers; a `MinecraftServer` in the same
+namespace inherits them with `spec.templateRef`. See
+[`examples/minecraftservertemplate.yaml`](examples/minecraftservertemplate.yaml):
+
+```yaml
+apiVersion: cubeharbor.dev/v1alpha1
+kind: MinecraftServerTemplate
+metadata: { name: paper-survival, namespace: cubeharbor }
+spec:
+  version: "1.21.4"
+  loader: paper
+  acceptEula: true
+  resources: { memory: 6Gi }
+  properties: { difficulty: hard, pvp: "false" }
+---
+apiVersion: cubeharbor.dev/v1alpha1
+kind: MinecraftServer
+metadata: { name: smp-east, namespace: cubeharbor }
+spec:
+  templateRef: { name: paper-survival }
+  properties: { pvp: "true" }     # wins; difficulty still comes from the template
+```
+
+The server's own settings always win:
+
+| Fields | How they combine |
+|---|---|
+| Single values, `modpack`, `voice`, `geyser`, `autoSleep`, `affinity` | The server's value, otherwise the template's |
+| `resources`, `jvm` | Field by field, as above |
+| `properties`, `env`, `nodeSelector` | Merged per key |
+| `mods`, `files`, `extraPorts` | Merged by Modrinth project or URL, path, and name; the server's entry replaces a matching one |
+| `ops`, `whitelist`, `tolerations`, `jvm.extraArgs` | A non-empty list on the server replaces the template's |
+
+* `routing` and `paused` belong to each server and can't be set in a template. Neither can a
+  `publicPort` or an Ingress `host`, since one value can't serve several servers.
+* A server with its own `modpack` doesn't inherit `version`, `loader` or `loaderVersion`, so the
+  pack decides them.
+* An empty list or map on a server can't clear what the template sets.
+* The API server stores `resources.memory: 4Gi` and `storage: 20Gi` when a server leaves them out,
+  so those exact values count as "not set". To really use 4Gi under a template with a different
+  memory, write `4096Mi`.
+* The dashboard shows the server's own memory, loader and features, not the template's.
+  `kubectl get mcs` and `status.resolved` show the version and loader in use; `status.template`
+  shows which template revision was applied.
+
+**Rolling out a template change.** The operator re-reads the template each time it reconciles a
+server, so an edit reaches every server that uses it within about a minute. Servers whose merged
+settings don't change are left alone. For the others, a change that affects the install or the pod
+restarts them right away, players included, all at once. Sleeping and stopped servers pick the
+change up on their next start. `status.template`
+records the applied `generation`. To go gradually, copy the template under a new name
+(`paper-survival-v2`) and move servers over one at a time. `resources.storage` and `storageClass` only
+apply when a server's volume is first created.
+
+If a referenced template is missing or invalid, the server's status message says so and its
+existing objects stay as they are, running or not, until the template is restored or the
+`templateRef` removed. While that lasts the operator can't apply other changes to that server, so
+pausing or waking it doesn't work either. Templates aren't protected from deletion. Upgrading an
+existing install requires applying the new CRDs first (see [Upgrading](#upgrading-and-uninstalling));
+with the old CRD the API server silently drops `templateRef`.
 
 ## API (for central dashboards)
 

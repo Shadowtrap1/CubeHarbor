@@ -38,6 +38,10 @@ pub const GEYSER_PORT: u16 = 19132;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct MinecraftServerSpec {
+    /// Inherit settings from a `MinecraftServerTemplate` in the same namespace. Anything set here wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_ref: Option<crate::template::TemplateRef>,
+
     /// Minecraft version (e.g. `1.21.1`, `26.3`, `latest`). Optional when a modpack defines it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -473,6 +477,9 @@ pub struct MinecraftServerStatus {
     /// Stopped by auto-sleep; the gateway clears this when a player joins.
     #[serde(default)]
     pub sleeping: bool,
+    /// The template revision last applied, for servers with a `templateRef`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<crate::template::AppliedTemplate>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, JsonSchema, PartialEq, Eq)]

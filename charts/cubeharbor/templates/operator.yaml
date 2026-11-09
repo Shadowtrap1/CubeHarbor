@@ -22,6 +22,10 @@ rules:
   - apiGroups: [cubeharbor.dev]
     resources: [minecraftservers/status]
     verbs: [get, patch, update]
+  # Read when a server has a templateRef; never written or watched.
+  - apiGroups: [cubeharbor.dev]
+    resources: [minecraftservertemplates]
+    verbs: [get]
 {{- if not $watch }}
 {{ $workloadRules }}
 {{- end }}

@@ -1,0 +1,49 @@
+# Settings shared by several servers. See "Server templates" in the README for how they merge.
+apiVersion: cubeharbor.dev/v1alpha1
+kind: MinecraftServerTemplate
+metadata:
+  name: paper-survival
+  namespace: cubeharbor
+spec:
+  acceptEula: true
+  version: "1.21.4"
+  loader: paper
+  resources:
+    memory: 6Gi
+    cpu: "1"
+  mods:
+    - modrinth: chunky
+  properties:
+    difficulty: hard
+    pvp: "false"
+  autoSleep:
+    idleMinutes: 20
+---
+# Everything comes from the template.
+apiVersion: cubeharbor.dev/v1alpha1
+kind: MinecraftServer
+metadata:
+  name: smp-east
+  namespace: cubeharbor
+spec:
+  templateRef:
+    name: paper-survival
+---
+# Overrides win: more memory, PvP on, one extra plugin. difficulty and chunky still come from the
+# template. Routing is always per server.
+apiVersion: cubeharbor.dev/v1alpha1
+kind: MinecraftServer
+metadata:
+  name: smp-pvp
+  namespace: cubeharbor
+spec:
+  templateRef:
+    name: paper-survival
+  resources:
+    memory: 10Gi
+  mods:
+    - modrinth: luckperms
+  properties:
+    pvp: "true"
+  routing:
+    hostnames: [pvp.mc.example.com]

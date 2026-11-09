@@ -112,7 +112,7 @@ async fn patch_status(api: &Api<MinecraftServer>, name: &str, status: &Minecraft
 
 /// Status fields that serialization leaves out when empty.
 const CLEARABLE_STATUS_FIELDS: &[&str] =
-    &["message", "observedGeneration", "resolved", "resolvedHash", "hostnames", "service", "allocations", "players", "lastActive"];
+    &["message", "observedGeneration", "resolved", "resolvedHash", "hostnames", "service", "allocations", "players", "lastActive", "template"];
 
 /// The status as a merge patch. A key left out of a merge patch keeps its old value, so empty
 /// fields are sent as explicit nulls; otherwise e.g. a fixed error's message would never clear.
@@ -166,6 +166,8 @@ fn stale<K: Resource>(obj: &K, uid: &str, wanted: &[String]) -> bool {
 }
 
 async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str, status: &mut MinecraftServerStatus) -> Result<Action> {
+    // Everything below sees the merged spec. Stays first so the checks (image allow-list, ports) do too.
+    let mcs = &crate::templates::effective(&ctx.client, ns, mcs, status).await?;
     let client = &ctx.client;
     let cfg = &ctx.cfg;
     let pp = PatchParams::apply(labels::FIELD_MANAGER).force();
@@ -633,6 +635,7 @@ mod tests {
             allocations: vec![PortAllocation { name: "voice".into(), protocol: Protocol::Udp, container_port: 1, public_port: 2 }],
             players: Some(Players::default()),
             last_active: Some("t".into()),
+            template: Some(cubeharbor_core::template::AppliedTemplate { name: "t".into(), generation: Some(1) }),
             ..Default::default()
         };
         let full = serde_json::to_value(&full).unwrap();

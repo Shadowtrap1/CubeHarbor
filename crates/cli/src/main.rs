@@ -20,6 +20,8 @@ struct Cli {
 enum Cmd {
     /// Print the MinecraftServer CustomResourceDefinition.
     Crd,
+    /// Print the MinecraftServerTemplate CustomResourceDefinition.
+    CrdTemplate,
     /// Convert a compose file (cubeharbor or docker-compose) into MinecraftServer manifests.
     Render {
         /// One or more compose files; several are imported together (e.g. servers/*/compose.yaml).
@@ -139,14 +141,17 @@ fn join_addr(host: &str, port: u16) -> String {
     }
 }
 
+fn print_crd(mut crd: serde_json::Value) -> Result<()> {
+    strip_formats(&mut crd);
+    print!("{}", serde_norway::to_string(&crd)?);
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().cmd {
-        Cmd::Crd => {
-            let mut crd = serde_json::to_value(MinecraftServer::crd())?;
-            strip_formats(&mut crd);
-            print!("{}", serde_norway::to_string(&crd)?)
-        }
+        Cmd::Crd => print_crd(serde_json::to_value(MinecraftServer::crd())?)?,
+        Cmd::CrdTemplate => print_crd(serde_json::to_value(cubeharbor_core::template::MinecraftServerTemplate::crd())?)?,
         Cmd::Render { files, namespace, rehost } => print!("{}", load_many(&files, rehost.as_deref())?.to_yaml(Some(&namespace))?),
         Cmd::Resolve { file } => {
             let http = cubeharbor_core::sources::Http::from_env()?;
