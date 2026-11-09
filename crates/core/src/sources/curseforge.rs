@@ -71,6 +71,10 @@ impl File {
         self.hashes.iter().find(|h| h.algo == 1).map(|h| h.value.as_str())
     }
 
+    pub fn md5(&self) -> Option<&str> {
+        self.hashes.iter().find(|h| h.algo == 2).map(|h| h.value.as_str())
+    }
+
     /// Download URL, reconstructing the CDN path when the author disabled third-party downloads.
     pub fn url(&self) -> String {
         match &self.download_url {
@@ -115,7 +119,7 @@ fn key(http: &Http) -> Result<&str> {
 }
 
 async fn get<T: serde::de::DeserializeOwned>(http: &Http, url: &str) -> Result<T> {
-    let resp = http.client.get(url).header("x-api-key", key(http)?).send().await.with_context(|| format!("GET {url}"))?;
+    let resp = http.send(http.client.get(url).header("x-api-key", key(http)?)).await.with_context(|| format!("GET {url}"))?;
     if !resp.status().is_success() {
         bail!("GET {url}: HTTP {}", resp.status());
     }
@@ -123,14 +127,7 @@ async fn get<T: serde::de::DeserializeOwned>(http: &Http, url: &str) -> Result<T
 }
 
 async fn post<T: serde::de::DeserializeOwned>(http: &Http, url: &str, body: serde_json::Value) -> Result<T> {
-    let resp = http
-        .client
-        .post(url)
-        .header("x-api-key", key(http)?)
-        .json(&body)
-        .send()
-        .await
-        .with_context(|| format!("POST {url}"))?;
+    let resp = http.send(http.client.post(url).header("x-api-key", key(http)?).json(&body)).await.with_context(|| format!("POST {url}"))?;
     if !resp.status().is_success() {
         bail!("POST {url}: HTTP {}", resp.status());
     }

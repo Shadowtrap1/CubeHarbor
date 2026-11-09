@@ -227,12 +227,7 @@ pub async fn versions_by_hash(http: &Http, sha1s: &[String]) -> Result<std::coll
     if sha1s.is_empty() {
         return Ok(Default::default());
     }
-    let resp = http
-        .client
-        .post(format!("{API}/version_files"))
-        .json(&serde_json::json!({ "hashes": sha1s, "algorithm": "sha1" }))
-        .send()
-        .await?;
+    let resp = http.send(http.client.post(format!("{API}/version_files")).json(&serde_json::json!({ "hashes": sha1s, "algorithm": "sha1" }))).await?;
     if !resp.status().is_success() {
         bail!("Modrinth hash lookup: HTTP {}", resp.status());
     }

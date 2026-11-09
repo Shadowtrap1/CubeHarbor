@@ -63,8 +63,8 @@ pub async fn install(ctx: &Ctx, mods: &[ModRef], mc: &str, loader: Loader, skip_
             urls: vec![file.url.clone()],
             dest: safe_join(&ctx.root, &rel)?,
             sha1: file.hashes.sha1.clone(),
-            sha256: None,
             sha512: file.hashes.sha512.clone(),
+            ..Default::default()
         });
         files.push(rel);
         for d in v.dependencies.iter().filter(|d| d.dependency_type == "required") {

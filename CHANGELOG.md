@@ -103,6 +103,9 @@ All notable changes are listed here. The format follows
 
 ### Changed
 
+* Installer: each loader and modpack format is now one module behind a trait and a registry
+  (`loaders/`, `modpack/`), so adding one doesn't touch the install flow. All of them go through
+  the same download and extraction code.
 * Operator: **leader election**, so `operator.replicas` can be 2 or more (the chart no longer
   refuses it). Only the replica holding the `<release>-operator` Lease reconciles; a standby takes
   over within ~15 seconds if it dies, or immediately when it shuts down (it releases the Lease
@@ -135,6 +138,15 @@ All notable changes are listed here. The format follows
 
 ### Fixed
 
+* Installer: failed or cancelled downloads no longer leave partial files, re-checking a file
+  no longer reads it all into memory, permanent errors (404, refused URLs) are not retried, API
+  calls retry transient errors, and a slow but moving download is no longer cut off after 10
+  minutes (stalls time out after 60s; `CUBEHARBOR_DOWNLOAD_TIMEOUT_SECS`, default 1 hour, limits
+  each attempt). Extraction, `launch.json` and `state.json` are written atomically.
+* Runner: `stop` can no longer hang on a full console pipe. A server that ignores `stop` gets
+  SIGTERM at 80% of the stop timeout and SIGKILL at the end. Death by signal exits with
+  128 + signal instead of 1 (or 0 during shutdown), and signals are handled from before the JVM
+  starts.
 * Gateway: a failed `accept()` on the Minecraft port (e.g. out of file descriptors under a
   connection flood) no longer exits the gateway; it's logged and retried.
 * Operator: a failed reconcile (a Kubernetes API hiccup, Modrinth unreachable while
@@ -191,6 +203,13 @@ All notable changes are listed here. The format follows
 
 ### Security
 
+* Installer: modpack archives and manifests are checked before anything is written. Traversal,
+  absolute paths and paths into `.cubeharbor/` refuse the whole pack; symlink entries are skipped
+  and symlinks on the volume that lead out of it are not followed. Manifests are read with a size
+  limit, and the extraction limit also holds when an archive lies about its sizes.
+* Installer: `.mrpack` files must carry a hash, Purpur builds are checked against their MD5 and
+  Forge, NeoForge and Quilt installers against their Maven `.sha1`. Only `http(s)` URLs are
+  fetched, and link-local addresses (cloud metadata) are refused, also on redirects.
 * Chart: mc-router (`router.mode: mc-router`) no longer enables its HTTP API on port 8080.
   That API is unauthenticated and can add or replace routes, so any pod in the cluster could
   have redirected a hostname's players to a server of its choosing. Nothing used it.

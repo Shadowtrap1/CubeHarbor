@@ -12,6 +12,7 @@ mod mods;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use cubeharbor_core::defaults;
@@ -23,6 +24,10 @@ pub struct Ctx {
     pub root: PathBuf,
     pub cache: Option<PathBuf>,
     pub concurrency: usize,
+    /// Largest single download.
+    pub max_download_bytes: u64,
+    /// Overall deadline for one download attempt (stalls are caught sooner by the read timeout).
+    pub download_timeout: Duration,
 }
 
 /// Is the boolean env var `name` set to a true-ish value (`true`, `1`, `yes`, `y`, `on`)?
@@ -47,9 +52,13 @@ async fn run() -> Result<()> {
         http: Http::from_env()?,
         root: PathBuf::from(std::env::var("CUBEHARBOR_DATA").unwrap_or_else(|_| defaults::DATA_DIR.into())),
         cache: std::env::var("CUBEHARBOR_CACHE").ok().filter(|s| !s.is_empty()).map(PathBuf::from),
-        concurrency: std::env::var("CUBEHARBOR_DOWNLOAD_CONCURRENCY").ok().and_then(|s| s.parse().ok()).unwrap_or(defaults::DOWNLOAD_CONCURRENCY as usize),
+        concurrency: std::env::var("CUBEHARBOR_DOWNLOAD_CONCURRENCY").ok().and_then(|s| s.parse().ok()).unwrap_or(defaults::DOWNLOAD_CONCURRENCY as usize).max(1),
+        max_download_bytes: download::max_download_bytes(),
+        download_timeout: download::download_timeout(),
     };
     tokio::fs::create_dir_all(ctx.root.join(plan::STATE_DIR)).await?;
+    // A killed run can't clean up after itself.
+    download::remove_part_files(&ctx.root).await;
 
     let state_path = ctx.root.join(plan::STATE_FILE);
     let mut state: InstallState = match tokio::fs::read(&state_path).await {
@@ -71,7 +80,7 @@ async fn run() -> Result<()> {
     let (mc, loader) = if base_changed {
         tracing::info!("server {}: installing", plan.server_name);
         let (mc, loader, launch, pack_files) = install_base(&ctx, &plan, &state).await?;
-        tokio::fs::write(&launch_path, serde_json::to_vec_pretty(&launch)?).await?;
+        download::write_atomic(&launch_path, &serde_json::to_vec_pretty(&launch)?).await?;
         state.base_hash = base_hash;
         state.pack_files = pack_files;
         state.minecraft_version = Some(mc.clone());
@@ -160,8 +169,112 @@ async fn remove_stale(root: &Path, previous: &[String], keep: &[&str]) {
 }
 
 async fn save(path: &Path, state: &InstallState) -> Result<()> {
-    tokio::fs::write(path, serde_json::to_vec_pretty(state)?).await?;
-    Ok(())
+    download::write_atomic(path, &serde_json::to_vec_pretty(state)?).await
+}
+
+#[cfg(test)]
+pub mod testutil {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use cubeharbor_core::sources::Http;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use crate::Ctx;
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    pub struct TempDir(PathBuf);
+
+    impl TempDir {
+        pub fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!("cubeharbor-t-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        pub fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    pub fn ctx(root: &Path) -> Ctx {
+        Ctx {
+            http: Http::new(None).unwrap(),
+            root: root.to_path_buf(),
+            cache: None,
+            concurrency: 4,
+            max_download_bytes: 1024 * 1024,
+            download_timeout: Duration::from_secs(10),
+        }
+    }
+
+    /// What the stub does with one connection.
+    #[derive(Clone)]
+    pub enum Reply {
+        Body(Vec<u8>),
+        Status(u16),
+        /// Promises more bytes than it sends, then hangs up.
+        Truncated(Vec<u8>),
+        /// Hangs up without a response.
+        Hangup,
+        /// Sends headers, then never sends the body.
+        Stall,
+        Redirect(String),
+    }
+
+    pub struct Stub {
+        pub url: String,
+        hits: Arc<AtomicUsize>,
+    }
+
+    impl Stub {
+        pub fn hits(&self) -> usize {
+            self.hits.load(Ordering::SeqCst)
+        }
+    }
+
+    /// Local HTTP stub: the n-th connection gets the n-th reply, and the last reply repeats.
+    pub async fn stub(replies: Vec<Reply>) -> Stub {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/file.jar", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let count = hits.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = listener.accept().await.unwrap();
+                let n = count.fetch_add(1, Ordering::SeqCst);
+                let reply = replies[n.min(replies.len() - 1)].clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = s.read(&mut buf).await;
+                    let head = |status: &str, extra: String| format!("HTTP/1.1 {status}\r\n{extra}connection: close\r\n\r\n").into_bytes();
+                    let out = match reply {
+                        Reply::Body(b) => [head("200 OK", format!("content-length: {}\r\n", b.len())), b].concat(),
+                        Reply::Status(c) => head(&format!("{c} X"), "content-length: 0\r\n".into()),
+                        Reply::Truncated(b) => [head("200 OK", format!("content-length: {}\r\n", b.len() + 100)), b].concat(),
+                        Reply::Hangup => return,
+                        Reply::Stall => {
+                            let _ = s.write_all(&head("200 OK", "content-length: 100\r\n".into())).await;
+                            tokio::time::sleep(Duration::from_secs(60)).await;
+                            return;
+                        }
+                        Reply::Redirect(to) => head("302 Found", format!("location: {to}\r\ncontent-length: 0\r\n")),
+                    };
+                    let _ = s.write_all(&out).await;
+                });
+            }
+        });
+        Stub { url, hits }
+    }
 }
 
 #[cfg(test)]
