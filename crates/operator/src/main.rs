@@ -1,5 +1,6 @@
 //! cubeharbor-operator: reconciles `MinecraftServer` resources into running servers.
 
+mod conditions;
 mod config;
 mod dns;
 mod leader;
@@ -7,6 +8,7 @@ mod metrics;
 mod ports;
 mod reconcile;
 mod resources;
+mod server_conditions;
 mod wake;
 
 use std::sync::Arc;
@@ -19,8 +21,11 @@ use cubeharbor_core::sources::Http;
 use futures::StreamExt;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
-use kube::runtime::{Controller, watcher};
+use kube::runtime::events::{Recorder, Reporter};
+use kube::runtime::controller::Config as ControllerConfig;
+use kube::runtime::{Controller, WatchStreamExt, reflector, watcher};
 use kube::{Api, Client};
+use std::collections::HashMap;
 use tokio::sync::{Mutex, Notify};
 
 use crate::reconcile::{Ctx, error_policy, reconcile, sync_gateway_ports};
@@ -55,22 +60,46 @@ async fn main() -> Result<()> {
     }
     stats.leader.store(true, Ordering::Relaxed);
 
+    let (servers, sts, svc, cm, sec) = if cfg.watch_namespace.is_empty() {
+        (Api::<MinecraftServer>::all(client.clone()), Api::<StatefulSet>::all(client.clone()), Api::<Service>::all(client.clone()), Api::<ConfigMap>::all(client.clone()), Api::<Secret>::all(client.clone()))
+    } else {
+        let ns = cfg.watch_namespace.as_str();
+        (Api::namespaced(client.clone(), ns), Api::namespaced(client.clone(), ns), Api::namespaced(client.clone(), ns), Api::namespaced(client.clone(), ns), Api::namespaced(client.clone(), ns))
+    };
+    let owned = watcher::Config::default().labels(&format!("{}={}", cubeharbor_core::labels::MANAGED_BY, cubeharbor_core::labels::MANAGER));
+
+    let controller = Controller::new(servers, watcher::Config::default());
+    let _ = stats.servers.set(controller.store());
+    // Port allocation needs every server even when only one namespace is reconciled.
+    let fleet = if cfg.watch_namespace.is_empty() {
+        controller.store()
+    } else {
+        let (store, writer) = reflector::store();
+        let stream = reflector(writer, watcher(Api::<MinecraftServer>::all(client.clone()), watcher::Config::default()).default_backoff());
+        tokio::spawn(stream.for_each(|_| futures::future::ready(())));
+        store
+    };
+
+    let reporter = Reporter { controller: "cubeharbor-operator".into(), instance: (!cfg.pod_name.is_empty()).then(|| cfg.pod_name.clone()) };
     let ctx = Arc::new(Ctx {
         client: client.clone(),
         http,
         cfg: cfg.clone(),
-        alloc_lock: Mutex::new(()),
+        allocations: Mutex::new(HashMap::new()),
+        fleet,
+        gateway_applied: Mutex::new(None),
         gateway_sync: Notify::new(),
         stats: stats.clone(),
+        recorder: Recorder::new(client.clone(), reporter),
     });
 
     // Gateway ports: debounce reconcile notifications, plus a periodic sweep that catches deletions.
     let sync_ctx = ctx.clone();
     tokio::spawn(async move {
         loop {
-            let _ = tokio::time::timeout(Duration::from_secs(30), sync_ctx.gateway_sync.notified()).await;
+            let sweep = tokio::time::timeout(Duration::from_secs(30), sync_ctx.gateway_sync.notified()).await.is_err();
             tokio::time::sleep(Duration::from_secs(2)).await;
-            if let Err(e) = sync_gateway_ports(&sync_ctx).await {
+            if let Err(e) = sync_gateway_ports(&sync_ctx, sweep).await {
                 sync_ctx.stats.gateway_sync_errors.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!("syncing gateway ports: {e:#}");
             }
@@ -88,18 +117,11 @@ async fn main() -> Result<()> {
         Err(e) => tracing::error!("Cloudflare DNS updates are off: {e}"),
     }
 
-    let (servers, sts, svc, cm, sec) = if cfg.watch_namespace.is_empty() {
-        (Api::<MinecraftServer>::all(client.clone()), Api::<StatefulSet>::all(client.clone()), Api::<Service>::all(client.clone()), Api::<ConfigMap>::all(client.clone()), Api::<Secret>::all(client.clone()))
-    } else {
-        let ns = cfg.watch_namespace.as_str();
-        (Api::namespaced(client.clone(), ns), Api::namespaced(client.clone(), ns), Api::namespaced(client.clone(), ns), Api::namespaced(client.clone(), ns), Api::namespaced(client.clone(), ns))
-    };
-    let owned = watcher::Config::default().labels(&format!("{}={}", cubeharbor_core::labels::MANAGED_BY, cubeharbor_core::labels::MANAGER));
-
-    let controller = Controller::new(servers, watcher::Config::default());
-    let _ = stats.servers.set(controller.store());
     // Stops on SIGTERM/SIGINT after the reconciles in flight finish.
+    // The debounce folds the watch echo of a status write into the next run.
+    let limits = ControllerConfig::default().concurrency(cfg.max_concurrent_reconciles).debounce(Duration::from_secs(1));
     let run = controller
+        .with_config(limits)
         .owns(sts, owned.clone())
         .owns(svc, owned.clone())
         .owns(cm, owned.clone())

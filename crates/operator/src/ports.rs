@@ -6,10 +6,30 @@
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Result, bail};
+use cubeharbor_core::MinecraftServer;
 use cubeharbor_core::crd::{PortAllocation, PortRequest};
+use kube::ResourceExt;
 
 /// Ports in use by *other* servers, keyed by (port, protocol) -> owner.
 pub type Used = HashMap<(u16, cubeharbor_core::crd::Protocol), String>;
+
+/// Allocations this process wrote that the watch cache may not show yet, by server UID. Reading
+/// the cache instead of LISTing per reconcile would otherwise let two servers reconciled in a row
+/// take the same port. Only the leader allocates, so nothing else can make an entry wrong.
+pub type Ledger = HashMap<String, Vec<PortAllocation>>;
+
+/// A server's allocations: what was just written, else what the cache has.
+pub fn allocations_of<'a>(ledger: &'a Ledger, server: &'a MinecraftServer) -> &'a [PortAllocation] {
+    let cached = || server.status.as_ref().map(|s| s.allocations.as_slice()).unwrap_or_default();
+    server.uid().and_then(|uid| ledger.get(&uid)).map_or_else(cached, Vec::as_slice)
+}
+
+/// Forget entries the cache has caught up with, and those of servers that are gone.
+pub fn settle(ledger: &mut Ledger, servers: &[std::sync::Arc<MinecraftServer>]) {
+    ledger.retain(|uid, written| {
+        servers.iter().any(|s| s.uid().as_deref() == Some(uid.as_str()) && s.status.as_ref().map(|st| &st.allocations) != Some(&*written))
+    });
+}
 
 /// Allocate ports for `requests`, keeping existing allocations when they still match.
 pub fn allocate(
@@ -69,6 +89,35 @@ mod tests {
 
     fn req(name: &str, pinned: Option<u16>) -> PortRequest {
         PortRequest { name: name.into(), protocol: Udp, container_port: 24454, public_port: pinned }
+    }
+
+    #[test]
+    fn the_ledger_overrides_the_cache_until_it_catches_up() {
+        use cubeharbor_core::crd::{MinecraftServerSpec, MinecraftServerStatus};
+        use std::sync::Arc;
+        let alloc = |port| PortAllocation { name: "voice".into(), protocol: Udp, container_port: 24454, public_port: port };
+        let server = |uid: &str, port: Option<u16>| {
+            let mut s = MinecraftServer::new("a", MinecraftServerSpec::default());
+            s.metadata.uid = Some(uid.into());
+            s.status = port.map(|p| MinecraftServerStatus { allocations: vec![alloc(p)], ..Default::default() });
+            Arc::new(s)
+        };
+        let mut ledger = Ledger::from([("u1".to_string(), vec![alloc(25600)])]);
+
+        // The cache is behind: the entry wins and stays.
+        let behind = vec![server("u1", None)];
+        assert_eq!(allocations_of(&ledger, &behind[0]), [alloc(25600)]);
+        settle(&mut ledger, &behind);
+        assert_eq!(ledger.len(), 1);
+
+        // Caught up: nothing left to remember.
+        settle(&mut ledger, &[server("u1", Some(25600))]);
+        assert!(ledger.is_empty());
+
+        // A deleted server's ports are free again.
+        let mut ledger = Ledger::from([("gone".to_string(), vec![alloc(25600)])]);
+        settle(&mut ledger, &[server("u1", None)]);
+        assert!(ledger.is_empty());
     }
 
     #[test]

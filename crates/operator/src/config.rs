@@ -84,6 +84,10 @@ pub struct Config {
     /// Name of the Lease, in POD_NAMESPACE (or the gateway namespace when that's empty).
     #[arg(long, env = "LEADER_ELECTION_LEASE", default_value = "cubeharbor-operator")]
     pub leader_election_lease: String,
+    /// Servers reconciled at the same time (0 = no limit), so a restart with hundreds of servers
+    /// doesn't flood the API server.
+    #[arg(long, env = "MAX_CONCURRENT_RECONCILES", default_value_t = 16)]
+    pub max_concurrent_reconciles: u16,
     #[arg(long, env = "POD_NAMESPACE", default_value = "")]
     pub pod_namespace: String,
     /// This replica's identity in the Lease (the pod name; HOSTNAME when empty).
