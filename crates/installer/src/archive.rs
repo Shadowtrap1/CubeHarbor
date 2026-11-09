@@ -412,6 +412,22 @@ mod tests {
         assert!(!dest.exists() || tree(&dest).is_empty());
     }
 
+    /// The declared total is checked up front: an earlier, small entry must not be written
+    /// before a later one pushes the archive over the limit.
+    #[test]
+    fn oversized_archives_write_nothing() {
+        let tmp = TempDir::new();
+        let dest = tmp.path().join("server");
+        let zeros = vec![0u8; 2 * 1024 * 1024];
+        let z = zip_of(&tmp, &[("small.txt", b"x"), ("bomb.bin", &zeros)]);
+        assert!(extract(&z, &dest, false).is_err());
+        assert!(
+            !dest.exists() || tree(&dest).is_empty(),
+            "partial output: {:?}",
+            tree(&dest)
+        );
+    }
+
     /// The central directory claims a tiny size, but the data inflates to much more.
     #[test]
     fn lying_size_headers_do_not_bypass_the_limit() {
