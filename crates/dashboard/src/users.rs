@@ -11,6 +11,8 @@
 //!
 //! This assumes one dashboard replica (the chart runs one): sessions and the loaded store live in
 //! this process, and saves overwrite `users.json` without checking for changes by another pod.
+//! To run several, sessions would have to move to shared storage and saves use the Secret's
+//! resourceVersion; the other per-process state (see `AppState`) only makes limits per-replica.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -18,7 +20,6 @@ use std::time::Instant;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
-use axum::http::Method;
 use k8s_openapi::api::core::v1::Secret;
 use kube::api::{Api, Patch, PatchParams};
 use serde::{Deserialize, Serialize};
@@ -40,7 +41,8 @@ const MAX_TOKENS_PER_USER: usize = 20;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
-    /// Read-only: server list and pages, logs, compose export, their own account.
+    /// Read-only: server list and pages, logs, compose export, their own account. `spec.env`
+    /// values are masked below admin, since they can hold credentials.
     Viewer,
     /// Also start, stop and restart servers and use the console.
     Operator,
@@ -61,23 +63,6 @@ impl Role {
 
     pub fn parse(s: &str) -> Option<Role> {
         Role::ALL.into_iter().find(|r| r.as_str() == s)
-    }
-}
-
-/// The least role a request needs. Every route goes through this (in the `auth` middleware), so
-/// hiding a button is never the only check. Anything not listed that changes state needs admin.
-pub fn required_role(method: &Method, path: &str) -> Role {
-    let read = matches!(*method, Method::GET | Method::HEAD);
-    let seg: Vec<&str> = path.strip_prefix('/').unwrap_or(path).split('/').collect();
-    match (read, seg.as_slice()) {
-        (_, ["users", ..]) => Role::Admin,
-        // Creating servers, including the forms and previews that lead to it.
-        (_, ["new", ..]) | (_, ["compose", "preview" | "apply"]) => Role::Admin,
-        (false, ["logout"]) | (false, ["account", ..]) => Role::Viewer,
-        (false, ["servers", _, _, "action", "start" | "stop" | "restart"]) => Role::Operator,
-        (false, ["servers", _, _, "console"]) => Role::Operator,
-        (false, _) => Role::Admin,
-        (true, _) => Role::Viewer,
     }
 }
 
@@ -374,6 +359,11 @@ impl Users {
         self.sessions.lock().unwrap().remove(token);
     }
 
+    /// Sessions that haven't expired.
+    pub fn session_count(&self) -> usize {
+        self.sessions.lock().unwrap().values().filter(|v| v.expires > Instant::now()).count()
+    }
+
     /// Log `user` out everywhere except the session `keep`.
     pub fn end_sessions_of(&self, user: &str, keep: Option<&str>) {
         self.sessions.lock().unwrap().retain(|t, v| v.user != user || Some(t.as_str()) == keep);
@@ -448,38 +438,6 @@ mod tests {
         assert!(s.token_user("chb_id2_s3cr3t").is_none());
         assert!(s.token_user("id1_s3cr3t").is_none());
         assert!(s.token_user("ops password 12").is_none(), "passwords aren't tokens");
-    }
-
-    #[test]
-    fn roles_per_route() {
-        use Role::*;
-        let get = |p: &str| required_role(&Method::GET, p);
-        let post = |p: &str| required_role(&Method::POST, p);
-        // Reading.
-        for p in ["/", "/fragments/servers", "/servers/mc/a", "/servers/mc/a/logs", "/servers/mc/a/compose.yaml", "/compose/export",
-            "/account", "/api/servers", "/api/v1/servers", "/api/v1/compose", "/api/v1/servers/mc/a/compose", "/api/modpacks/search"] {
-            assert_eq!(get(p), Viewer, "{p}");
-        }
-        assert_eq!(post("/logout"), Viewer);
-        assert_eq!(post("/account/password"), Viewer);
-        assert_eq!(post("/account/tokens"), Viewer);
-        assert_eq!(post("/account/tokens/ab/revoke"), Viewer);
-        // Running servers.
-        for a in ["start", "stop", "restart"] {
-            assert_eq!(post(&format!("/servers/mc/a/action/{a}")), Operator);
-        }
-        assert_eq!(post("/servers/mc/a/console"), Operator);
-        // Changing what runs, and users.
-        for p in ["/servers/mc/a/action/delete", "/servers/mc/a/action/delete-data", "/servers/mc/a/action/other", "/servers/mc/a/spec",
-            "/new/quick", "/compose/preview", "/compose/apply", "/api/compose", "/api/v1/compose", "/users", "/users/bob/role",
-            "/users/bob/password", "/users/bob/delete", "/anything-new"] {
-            assert_eq!(post(p), Admin, "{p}");
-        }
-        assert_eq!(get("/users"), Admin);
-        assert_eq!(get("/new"), Admin);
-        assert_eq!(required_role(&Method::DELETE, "/servers/mc/a"), Admin);
-        assert_eq!(required_role(&Method::PUT, "/account/password"), Viewer, "own account, any method");
-        assert!(Admin > Operator && Operator > Viewer);
     }
 
     #[tokio::test]

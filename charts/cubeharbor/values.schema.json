@@ -781,6 +781,12 @@
                 "null"
               ]
             },
+            "metricsFrom": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
             "allowFrom": {
               "type": "array",
               "items": {

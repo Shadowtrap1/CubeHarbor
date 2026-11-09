@@ -125,7 +125,7 @@ the full details.
 | `imagePullSecrets` | `[]` |  |
 | `commonLabels` | `{}` | Labels added to every object the chart creates and to its pods (e.g. team, cost center). app.kubernetes.io/* and helm.sh/chart keys are ignored here: the chart sets those itself. |
 | `logFormat` | `text` | Log format of the operator, gateway and dashboard: "text" or "json" (one JSON object per line, for log collectors). |
-| `metrics` |  | Prometheus metrics. The gateway serves /metrics on its health port (8081) and the operator on 8080 (counts only: no hostnames, IPs or server names). `enabled` adds ClusterIP `<release>-gateway-metrics` / `<release>-operator-metrics` Services (never the public gateway Service) for Prometheus to scrape. |
+| `metrics` |  | Prometheus metrics. The gateway and dashboard serve /metrics on their health port (8081) and the operator on 8080 (counts only: no hostnames, IPs or server names). `enabled` adds ClusterIP `<release>-gateway-metrics` / `<release>-operator-metrics` / `<release>-dashboard-metrics` Services (never a public Service) for Prometheus to scrape. |
 | `metrics.enabled` | `false` |  |
 | `metrics.serviceMonitor.enabled` | `false` | Also create a Prometheus Operator ServiceMonitor (needs the monitoring.coreos.com CRDs). |
 | `metrics.serviceMonitor.namespace` | `""` | Namespace of the ServiceMonitor (release namespace when empty). |
@@ -251,6 +251,7 @@ the full details.
 | `dashboard.networkPolicy` |  | NetworkPolicy that only lets cloudflared (with cloudflareTunnel) and `allowFrom` connect to the dashboard. Without it, any pod (including Minecraft servers running third-party plugins) could reach it from inside trustedProxies and forge X-Forwarded-For to dodge the per-client login limit. null = on with cloudflareTunnel, off otherwise. Needs a CNI that enforces NetworkPolicy (k3s does by default). kubectl port-forward and the node itself are not affected. |
 | `dashboard.networkPolicy.enabled` | `null` |  |
 | `dashboard.networkPolicy.allowFrom` | `[]` | More NetworkPolicyPeers allowed in: your ingress controller (required when dashboard.ingress is enabled), or another cubeharbor release in the cluster that lists this dashboard in its `remotes`. No cubeharbor component calls the dashboard itself. |
+| `dashboard.networkPolicy.metricsFrom` | `[]` | NetworkPolicyPeers allowed to scrape the dashboard's /metrics when metrics.enabled is on (the health port only, not the login page). Prometheus is blocked if this stays empty. |
 | `dashboard.service.type` | `ClusterIP` |  |
 | `dashboard.service.port` | `80` |  |
 | `dashboard.ingress` |  | Ingress for the dashboard. Serve it over TLS: passwords and the session cookie cross this connection. With cert-manager, add an issuer annotation and a tls entry, e.g. With dashboard.networkPolicy on, also list the ingress controller in networkPolicy.allowFrom. |

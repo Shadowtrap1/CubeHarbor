@@ -21,8 +21,11 @@ spec:
     matchLabels: {{- include "cubeharbor.selector" . | nindent 6 }}
       app.kubernetes.io/component: dashboard
   policyTypes: [Ingress]
-  {{- if or .Values.cloudflareTunnel.enabled $np.allowFrom .Values.tests.enabled }}
+  {{- $metricsFrom := and .Values.metrics.enabled $np.metricsFrom }}
+  {{- $appFrom := or .Values.cloudflareTunnel.enabled $np.allowFrom .Values.tests.enabled }}
+  {{- if or $appFrom $metricsFrom }}
   ingress:
+    {{- if $appFrom }}
     - from:
         {{- if .Values.cloudflareTunnel.enabled }}
         - podSelector:
@@ -41,6 +44,13 @@ spec:
         {{- end }}
       ports:
         - { port: 8080, protocol: TCP }
+    {{- end }}
+    {{- if $metricsFrom }}
+    # Prometheus: only the health port, which has no login page and no API.
+    - from: {{- toYaml $np.metricsFrom | nindent 8 }}
+      ports:
+        - { port: 8081, protocol: TCP }
+    {{- end }}
   {{- else }}
   # Nothing is listed: only kubectl port-forward (and the node, e.g. kubelet probes) reach it.
   ingress: []

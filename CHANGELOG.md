@@ -8,6 +8,14 @@ All notable changes are listed here. The format follows
 
 ### Added
 
+* Dashboard: Prometheus `/metrics` and `/readyz` on a separate health port (8081, `HEALTH_ADDR`):
+  logins, failed passwords and tokens, throttled, forbidden and cross-site requests, sessions,
+  users, open log streams. The chart's readiness probe uses `/readyz`; `metrics.enabled` adds a
+  `<release>-dashboard-metrics` Service, and `dashboard.networkPolicy.metricsFrom` lets Prometheus
+  through the dashboard's NetworkPolicy.
+* Dashboard: graceful shutdown. On `SIGTERM` it reports not ready, keeps serving for 5 seconds
+  (`SHUTDOWN_DELAY_SECS`), ends open log streams, then waits up to 20 seconds
+  (`DRAIN_TIMEOUT_SECS`) for requests. Before, an open log stream held the pod until SIGKILL.
 * Chart: `metrics.enabled` adds ClusterIP Services for the gateway's and the operator's
   `/metrics` (never on the public gateway Service), and `metrics.serviceMonitor.enabled` a
   Prometheus Operator ServiceMonitor for them (`labels`, `interval`, `namespace`). Both off by
@@ -135,6 +143,9 @@ All notable changes are listed here. The format follows
 
 ### Fixed
 
+* Dashboard: missing servers answer 404, bad compose files and specs 400 and refused namespaces
+  403, instead of 500. A compose file with one refused server no longer applies the others first.
+
 * Gateway: a failed `accept()` on the Minecraft port (e.g. out of file descriptors under a
   connection flood) no longer exits the gateway; it's logged and retried.
 * Operator: a failed reconcile (a Kubernetes API hiccup, Modrinth unreachable while
@@ -190,6 +201,21 @@ All notable changes are listed here. The format follows
   stopped server's player list no longer stick around.
 
 ### Security
+
+* Dashboard: authorization is one table (`routes.rs`): a route is registered together with its
+  access rule, so it can't be added without one.
+* Dashboard: namespaces and server names are validated before they reach Kubernetes API URLs or
+  RCON addresses. Encoded `/`, `?` or `..` in a server name could address other objects.
+* Dashboard: `spec.env` values are masked for viewers and operators (server page, `/api/servers`,
+  compose exports), since they can hold credentials.
+* Dashboard: changing a user's role needs the admin's own password, like adding a user or
+  resetting a password. Scripts posting to `/users/{name}/role` must send `current`.
+* Dashboard: the login form refuses cross-site posts, and concurrent password guesses count
+  against the failed-login limit straight away instead of after hashing.
+* Dashboard: Kubernetes, RCON, remote-setup and modpack-search errors no longer reach clients
+  (they named service accounts and internal addresses, and the public server list included
+  them); the logs keep the details. Responses are sent with `Cache-Control: no-store`.
+* Dashboard: log streams end when their session does (within 30 seconds) and are capped at 64.
 
 * Chart: mc-router (`router.mode: mc-router`) no longer enables its HTTP API on port 8080.
   That API is unauthenticated and can add or replace routes, so any pod in the cluster could

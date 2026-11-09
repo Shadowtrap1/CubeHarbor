@@ -14,10 +14,10 @@ commonLabels: {}
 # line, for log collectors).
 logFormat: text
 
-# -- Prometheus metrics. The gateway serves /metrics on its health port (8081) and the operator
-# on 8080 (counts only: no hostnames, IPs or server names). `enabled` adds ClusterIP
-# `<release>-gateway-metrics` / `<release>-operator-metrics` Services (never the public gateway
-# Service) for Prometheus to scrape.
+# -- Prometheus metrics. The gateway and dashboard serve /metrics on their health port (8081) and
+# the operator on 8080 (counts only: no hostnames, IPs or server names). `enabled` adds ClusterIP
+# `<release>-gateway-metrics` / `<release>-operator-metrics` / `<release>-dashboard-metrics`
+# Services (never a public Service) for Prometheus to scrape.
 metrics:
   enabled: false
   serviceMonitor:
@@ -310,6 +310,10 @@ dashboard:
     # dashboard in its `remotes`. No cubeharbor component calls the dashboard itself.
     # - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
     allowFrom: []
+    # -- NetworkPolicyPeers allowed to scrape the dashboard's /metrics when metrics.enabled is on
+    # (the health port only, not the login page). Prometheus is blocked if this stays empty.
+    # - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
+    metricsFrom: []
   service:
     type: ClusterIP
     port: 80

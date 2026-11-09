@@ -1,9 +1,11 @@
-{{- /* Prometheus scraping: ClusterIP Services for the gateway's and the operator's /metrics (on
-their health ports, never on the public gateway Service) and an optional ServiceMonitor. */ -}}
+{{- /* Prometheus scraping: ClusterIP Services for the gateway's, operator's and dashboard's
+/metrics (on their health ports, never on a public Service) and an optional ServiceMonitor. */ -}}
 {{- $m := .Values.metrics -}}
 {{- if $m.enabled }}
 {{- $fullname := include "cubeharbor.fullname" . -}}
-{{- range list (dict "component" "operator" "port" 8080) (dict "component" "gateway" "port" 8081) }}
+{{- $components := list (dict "component" "operator" "port" 8080) (dict "component" "gateway" "port" 8081) }}
+{{- if .Values.dashboard.enabled }}{{ $components = append $components (dict "component" "dashboard" "port" 8081) }}{{ end }}
+{{- range $components }}
 ---
 apiVersion: v1
 kind: Service

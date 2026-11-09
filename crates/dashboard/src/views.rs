@@ -116,7 +116,7 @@ fn current_password_field() -> Markup {
 pub fn account(st: &AppState, me: &Identity, msg: Option<Result<&str, &str>>, new_token: Option<&str>) -> Markup {
     let editable = st.users.editable();
     let tokens = st.users.snapshot().get(&me.name).map(|u| u.tokens.clone()).unwrap_or_default();
-    let min = crate::handlers::MIN_PASSWORD_LEN;
+    let min = crate::account::MIN_PASSWORD_LEN;
     layout("Account", Some(me), html! {
         h1 { "Account" }
         p.muted { "Logged in as " b { (me.name) } " (" (me.role.as_str()) ")." }
@@ -169,7 +169,7 @@ pub fn account(st: &AppState, me: &Identity, msg: Option<Result<&str, &str>>, ne
 pub fn users(st: &AppState, me: &Identity, msg: Option<Result<&str, &str>>) -> Markup {
     let store = st.users.snapshot();
     let editable = st.users.editable();
-    let min = crate::handlers::MIN_PASSWORD_LEN;
+    let min = crate::account::MIN_PASSWORD_LEN;
     let role_select = |current: Role| html! {
         select name="role" style="width:auto" { @for r in Role::ALL { option value=(r.as_str()) selected[r == current] { (r.as_str()) } } }
     };
@@ -185,7 +185,11 @@ pub fn users(st: &AppState, me: &Identity, msg: Option<Result<&str, &str>>) -> M
                 tbody { @for u in &store.users { tr {
                     td { b { (u.name) } @if u.name == me.name { " " span.muted { "(you)" } } }
                     td { @if editable {
-                        form.row method="post" action=(format!("/users/{}/role", u.name)) { (role_select(u.role)) button { "Set" } }
+                        form.row method="post" action=(format!("/users/{}/role", u.name)) {
+                            (role_select(u.role))
+                            input type="password" name="current" autocomplete="current-password" placeholder="Your password" required style="width:auto";
+                            button { "Set" }
+                        }
                     } @else { (u.role.as_str()) } }
                     td { (u.tokens.len()) }
                     td { @if editable { .row {
