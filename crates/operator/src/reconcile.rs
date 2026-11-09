@@ -323,7 +323,7 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
     if spec.paused || spec.auto_sleep.is_none() {
         status.sleeping = false;
     }
-    let running = !spec.paused && !status.sleeping;
+    let running = !spec.paused && !status.sleeping && !cubeharbor_core::backup::stop_requested(mcs.annotations());
 
     // 9. StatefulSet (volume claim templates are immutable, so keep whatever exists).
     let existing_claims = existing_sts

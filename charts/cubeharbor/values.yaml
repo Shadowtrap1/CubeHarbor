@@ -142,6 +142,17 @@ cache:
   storageClass: ""
   accessMode: ReadWriteMany
 
+# -- World backups and restores (MinecraftBackup, MinecraftBackupSchedule and MinecraftRestore
+# resources). Off by default; the CRDs are inert without it. See "Backups" in the README.
+backups:
+  enabled: false
+  # -- Container resources of backup and restore Jobs. S3 uploads buffer 32 MiB parts.
+  jobResources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+  # -- How long finished Jobs (and their logs) are kept.
+  jobTtlSeconds: 86400
+
 operator:
   # -- 2 or more keeps a standby ready to take over within ~15s. Needs leaderElection: only the
   # replica holding the Lease reconciles (port allocation is coordinated inside one process).

@@ -179,6 +179,12 @@ the full details.
 | `cache.size` | `50Gi` |  |
 | `cache.storageClass` | `""` |  |
 | `cache.accessMode` | `ReadWriteMany` |  |
+| `backups` |  | World backups and restores (MinecraftBackup, MinecraftBackupSchedule and MinecraftRestore resources). Off by default; the CRDs are inert without it. See "Backups" in the README. |
+| `backups.enabled` | `false` |  |
+| `backups.jobResources` |  | Container resources of backup and restore Jobs. S3 uploads buffer 32 MiB parts. |
+| `backups.jobResources.requests` | `{ cpu: 100m, memory: 128Mi }` |  |
+| `backups.jobResources.limits` | `{ memory: 512Mi }` |  |
+| `backups.jobTtlSeconds` | `86400` | How long finished Jobs (and their logs) are kept. |
 | `operator.replicas` | `1` | 2 or more keeps a standby ready to take over within ~15s. Needs leaderElection: only the replica holding the Lease reconciles (port allocation is coordinated inside one process). |
 | `operator.leaderElection` | `true` | Elect a leader with a coordination.k8s.io Lease named <release>-operator. With it on, upgrades roll (the new pod takes over when the old one releases the Lease); off = Recreate. |
 | `operator.resources.requests` | `{ cpu: 50m, memory: 64Mi }` |  |

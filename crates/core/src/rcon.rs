@@ -12,6 +12,7 @@ const COMMAND: i32 = 2;
 pub struct Rcon {
     stream: TcpStream,
     next_id: i32,
+    read_timeout: Duration,
 }
 
 impl Rcon {
@@ -19,7 +20,7 @@ impl Rcon {
         let stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
             .await
             .context("RCON connect timed out")??;
-        let mut r = Self { stream, next_id: 1 };
+        let mut r = Self { stream, next_id: 1, read_timeout: Duration::from_secs(10) };
         let id = r.send(AUTH, password).await?;
         // Some servers send an empty RESPONSE_VALUE before the auth response.
         loop {
@@ -31,6 +32,11 @@ impl Rcon {
                 return Ok(r);
             }
         }
+    }
+
+    /// How long to wait for a reply. Commands like `save-all flush` can take minutes.
+    pub fn set_read_timeout(&mut self, timeout: Duration) {
+        self.read_timeout = timeout;
     }
 
     pub async fn command(&mut self, cmd: &str) -> Result<String> {
@@ -64,6 +70,7 @@ impl Rcon {
     }
 
     async fn recv(&mut self) -> Result<(i32, i32, String)> {
+        let timeout = self.read_timeout;
         let fut = async {
             let len = self.stream.read_i32_le().await?;
             if !(10..=1 << 20).contains(&len) {
@@ -76,7 +83,7 @@ impl Rcon {
             let body = String::from_utf8_lossy(&buf[8..buf.len() - 2]).into_owned();
             Ok((id, kind, body))
         };
-        tokio::time::timeout(Duration::from_secs(10), fut).await.context("RCON read timed out")?
+        tokio::time::timeout(timeout, fut).await.context("RCON read timed out")?
     }
 }
 

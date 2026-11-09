@@ -1,0 +1,21 @@
+[package]
+name = "cubeharbor-backup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Backup and restore of Minecraft server data: archives, storage backends, cron schedules"
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+cubeharbor-core.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+jiff = "0.2"
+tar = "0.4"
+flate2 = "1"
+sha2 = "0.11"
+hmac = "0.13"

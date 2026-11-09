@@ -587,6 +587,70 @@ cloudflareTunnel:
 The chart writes these rules into a ConfigMap (`<release>-cloudflared`) and restarts cloudflared
 when they change. Protect every extra hostname with Access too.
 
+## Backups
+
+Off by default. Turn it on with `--set backups.enabled=true`; when upgrading, apply the new CRDs
+first (`kubectl apply -f charts/cubeharbor/crds/`), because Helm doesn't update CRDs. Every
+resource below lives in the server's namespace.
+
+```yaml
+apiVersion: cubeharbor.dev/v1alpha1
+kind: MinecraftBackupSchedule
+metadata: { name: lobby-nightly }
+spec:
+  server: lobby
+  schedule: "0 4 * * *"       # five-field cron in UTC, or @hourly / @daily / @weekly / @monthly
+  retention: { keepLast: 7, keepDays: 30 }
+  storage:
+    s3:
+      bucket: mc-backups
+      region: eu-central-1
+      # endpoint: https://minio.example.com    # any S3-compatible service; path-style by default
+      credentialsSecret: { name: backup-s3 }   # keys accessKeyId, secretAccessKey, optional sessionToken
+```
+
+For one backup now, create a `MinecraftBackup` with `server` and `storage`. To keep backups on a
+volume, use `storage: { pvc: { claimName: mc-backups } }`. It should be ReadWriteMany: the backup
+of a running server runs on that server's node (to share its volume), so a ReadWriteOnce volume
+attached elsewhere leaves the Job waiting until its timeout.
+
+`kubectl get mcb,mcbs,mcr` shows phase, mode, size and times; `status.message` says why something
+failed or is waiting.
+
+```yaml
+apiVersion: cubeharbor.dev/v1alpha1
+kind: MinecraftRestore
+metadata: { name: lobby-rollback }
+spec:
+  source: { backup: lobby-nightly-1767240000 }   # or storage + key, for an archive from elsewhere
+  target:
+    server: lobby
+    overwriteExisting: true    # required to replace the data of an existing server
+    # newServer: { version: "1.21.4", loader: paper }   # creates target.server when it's missing
+```
+
+How it works, and what to know:
+
+* **Consistency.** A running server gets `save-off`, `save-all flush`, the archive, then `save-on`,
+  so autosave is off while the archive uploads. If the Job is killed, `save-on` is sent from the
+  shutdown handler or a follow-up Job. A stopped (paused or sleeping) server is held stopped during
+  its backup, so a player joining then waits for it to finish. A server that is starting up is
+  waited for, up to 30 minutes.
+* **Restores replace everything.** The server is stopped, the archive is unpacked next to the data
+  and checked against its SHA-256, and only then swapped in, so a bad download leaves the data as
+  it was. `logs`, `crash-reports` and `cache` are never archived; add more with `exclude`.
+* **Retention** applies to backups the schedule made, and only after a newer backup succeeded.
+  Deleting a `MinecraftBackup` keeps the archive, and deleting a schedule deletes its
+  `MinecraftBackup` objects but not their archives (restore those with `storage` and `key`). A schedule missed by over an hour
+  (operator down) waits for its next time.
+* **Permissions.** Whoever can create these resources can overwrite server data and, with
+  `newServer`, create servers, so grant them like `MinecraftServer` access. The operator never
+  reads S3 credentials: Jobs get them through `secretKeyRef`, and the chart adds no Secret access.
+  Jobs have no API token and are the only pods besides the dashboard allowed to reach their
+  server's RCON port.
+
+To add a storage backend, see `crates/backup/src/store/mod.rs`: one module and one match arm.
+
 ## Customizing
 
 **Dashboard look and form defaults** go under `dashboard.site` in your Helm values. The chart

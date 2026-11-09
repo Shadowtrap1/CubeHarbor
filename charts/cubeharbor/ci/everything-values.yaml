@@ -7,6 +7,8 @@ minecraft:
   ingressClass: nginx
 cache:
   enabled: true
+backups:
+  enabled: true
 curseforge:
   apiKey: test-key
 imagePullSecrets: [{ name: regcred }]

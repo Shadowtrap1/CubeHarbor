@@ -146,6 +146,26 @@ priorityClassName: {{ . }}
   - apiGroups: ["", events.k8s.io]
     resources: [events]
     verbs: [create, patch]
+{{- if .Values.backups.enabled }}
+  # Backups. S3 credentials and RCON passwords reach the Job pods through secretKeyRef, so this
+  # grants nothing on Secrets.
+  - apiGroups: [cubeharbor.dev]
+    resources: [minecraftbackups, minecraftbackupschedules, minecraftrestores]
+    verbs: [get, list, watch, create, delete, patch]
+  - apiGroups: [cubeharbor.dev]
+    resources: [minecraftbackups/status, minecraftbackupschedules/status, minecraftrestores/status]
+    verbs: [get, patch]
+  # A restore into a new server creates it, with its data volume.
+  - apiGroups: [cubeharbor.dev]
+    resources: [minecraftservers]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, create]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create]
+{{- end }}
 {{- end -}}
 
 {{/* Namespaces the dashboard manages: its default namespace plus dashboard.allowedNamespaces. */}}

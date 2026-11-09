@@ -1,5 +1,6 @@
 //! cubeharbor-operator: reconciles `MinecraftServer` resources into running servers.
 
+mod backup;
 mod config;
 mod dns;
 mod leader;
@@ -78,6 +79,10 @@ async fn main() -> Result<()> {
     });
 
     tokio::spawn(wake::run(client.clone(), cfg.clone()));
+
+    if cfg.backups_enabled {
+        tokio::spawn(backup::run(client.clone(), cfg.clone()));
+    }
 
     match dns::Settings::from_config(&cfg) {
         Ok(Some(settings)) => {

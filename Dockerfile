@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked \
  && mkdir -p /out \
  && cp target/release/cubeharbor-operator target/release/cubeharbor-gateway target/release/cubeharbor-dashboard \
-       target/release/cubeharbor-installer target/release/cubeharbor-runner target/release/cubeharbor /out/
+       target/release/cubeharbor-installer target/release/cubeharbor-runner target/release/cubeharbor-backup target/release/cubeharbor /out/
 
 # `docker build --target test .` runs the unit tests (used by CI).
 FROM build AS test
@@ -45,7 +45,7 @@ ENTRYPOINT ["/usr/local/bin/cubeharbor"]
 
 # Server image: Temurin JRE + the Rust installer (init container) and runner (PID 1).
 FROM eclipse-temurin:${JAVA_VERSION}-jre AS server
-COPY --from=build /out/cubeharbor-installer /out/cubeharbor-runner /usr/local/bin/
+COPY --from=build /out/cubeharbor-installer /out/cubeharbor-runner /out/cubeharbor-backup /usr/local/bin/
 RUN mkdir -p /data /cache && chown 1000:1000 /data /cache
 ENV CUBEHARBOR_DATA=/data
 WORKDIR /data
