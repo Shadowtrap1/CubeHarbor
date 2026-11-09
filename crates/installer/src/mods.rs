@@ -14,7 +14,13 @@ use crate::Ctx;
 use crate::download::{Item, fetch_all, hex, safe_join};
 
 /// Install `mods`, returning the relative paths written.
-pub async fn install(ctx: &Ctx, mods: &[ModRef], mc: &str, loader: Loader, skip_files: &HashSet<String>) -> Result<Vec<String>> {
+pub async fn install(
+    ctx: &Ctx,
+    mods: &[ModRef],
+    mc: &str,
+    loader: Loader,
+    skip_files: &HashSet<String>,
+) -> Result<Vec<String>> {
     if mods.is_empty() {
         return Ok(vec![]);
     }
@@ -31,10 +37,22 @@ pub async fn install(ctx: &Ctx, mods: &[ModRef], mc: &str, loader: Loader, skip_
         let dir = m.dir.clone().unwrap_or_else(|| default_dir.to_string());
         if let Some(url) = &m.url {
             // A `#file.jar` fragment names the file when the URL path doesn't.
-            let (url, fragment) = url.split_once('#').map_or((url.as_str(), None), |(u, f)| (u, Some(f)));
-            let name = fragment
-                .unwrap_or_else(|| url.split('?').next().unwrap_or(url).rsplit('/').next().unwrap_or("mod.jar"));
-            let name = if name.ends_with(".jar") || name.ends_with(".zip") { name.to_string() } else { format!("{name}.jar") };
+            let (url, fragment) = url
+                .split_once('#')
+                .map_or((url.as_str(), None), |(u, f)| (u, Some(f)));
+            let name = fragment.unwrap_or_else(|| {
+                url.split('?')
+                    .next()
+                    .unwrap_or(url)
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("mod.jar")
+            });
+            let name = if name.ends_with(".jar") || name.ends_with(".zip") {
+                name.to_string()
+            } else {
+                format!("{name}.jar")
+            };
             let rel = format!("{dir}/{name}");
             items.push(Item::new(url, safe_join(&ctx.root, &rel)?));
             files.push(rel);
@@ -44,7 +62,15 @@ pub async fn install(ctx: &Ctx, mods: &[ModRef], mc: &str, loader: Loader, skip_
     }
 
     while let Some((project, pinned, dir, explicit)) = queue.pop_front() {
-        let v = match modrinth::compatible_version(&ctx.http, &project, loader.modrinth_name(), mc, pinned.as_deref()).await {
+        let v = match modrinth::compatible_version(
+            &ctx.http,
+            &project,
+            loader.modrinth_name(),
+            mc,
+            pinned.as_deref(),
+        )
+        .await
+        {
             Ok(v) => v,
             Err(e) if !explicit => {
                 tracing::warn!("optional dependency {project}: {e:#}");
@@ -56,18 +82,24 @@ pub async fn install(ctx: &Ctx, mods: &[ModRef], mc: &str, loader: Loader, skip_
             tracing::info!("  {project} already provided, skipping");
             continue;
         }
-        let file = v.primary_file().with_context(|| format!("{project} has no files"))?;
+        let file = v
+            .primary_file()
+            .with_context(|| format!("{project} has no files"))?;
         let rel = format!("{dir}/{}", file.filename);
         tracing::info!("  {project} {} -> {rel}", v.version_number);
         items.push(Item {
             urls: vec![file.url.clone()],
             dest: safe_join(&ctx.root, &rel)?,
             sha1: file.hashes.sha1.clone(),
-            sha256: None,
             sha512: file.hashes.sha512.clone(),
+            ..Default::default()
         });
         files.push(rel);
-        for d in v.dependencies.iter().filter(|d| d.dependency_type == "required") {
+        for d in v
+            .dependencies
+            .iter()
+            .filter(|d| d.dependency_type == "required")
+        {
             if let Some(pid) = &d.project_id
                 && !seen.contains(pid)
             {
@@ -86,7 +118,10 @@ async fn present_projects(ctx: &Ctx, dir: &Path, skip_files: &HashSet<String>) -
     if let Ok(mut rd) = tokio::fs::read_dir(dir).await {
         while let Ok(Some(e)) = rd.next_entry().await {
             let name = e.file_name().to_string_lossy().to_string();
-            let rel = format!("{}/{name}", dir.file_name().unwrap_or_default().to_string_lossy());
+            let rel = format!(
+                "{}/{name}",
+                dir.file_name().unwrap_or_default().to_string_lossy()
+            );
             if !name.ends_with(".jar") || skip_files.contains(&rel) {
                 continue;
             }

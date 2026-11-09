@@ -68,7 +68,17 @@ struct Data<T> {
 
 impl File {
     pub fn sha1(&self) -> Option<&str> {
-        self.hashes.iter().find(|h| h.algo == 1).map(|h| h.value.as_str())
+        self.hashes
+            .iter()
+            .find(|h| h.algo == 1)
+            .map(|h| h.value.as_str())
+    }
+
+    pub fn md5(&self) -> Option<&str> {
+        self.hashes
+            .iter()
+            .find(|h| h.algo == 2)
+            .map(|h| h.value.as_str())
     }
 
     /// Download URL, reconstructing the CDN path when the author disabled third-party downloads.
@@ -115,20 +125,28 @@ fn key(http: &Http) -> Result<&str> {
 }
 
 async fn get<T: serde::de::DeserializeOwned>(http: &Http, url: &str) -> Result<T> {
-    let resp = http.client.get(url).header("x-api-key", key(http)?).send().await.with_context(|| format!("GET {url}"))?;
+    let resp = http
+        .send(http.client.get(url).header("x-api-key", key(http)?))
+        .await
+        .with_context(|| format!("GET {url}"))?;
     if !resp.status().is_success() {
         bail!("GET {url}: HTTP {}", resp.status());
     }
     Ok(resp.json::<Data<T>>().await?.data)
 }
 
-async fn post<T: serde::de::DeserializeOwned>(http: &Http, url: &str, body: serde_json::Value) -> Result<T> {
+async fn post<T: serde::de::DeserializeOwned>(
+    http: &Http,
+    url: &str,
+    body: serde_json::Value,
+) -> Result<T> {
     let resp = http
-        .client
-        .post(url)
-        .header("x-api-key", key(http)?)
-        .json(&body)
-        .send()
+        .send(
+            http.client
+                .post(url)
+                .header("x-api-key", key(http)?)
+                .json(&body),
+        )
         .await
         .with_context(|| format!("POST {url}"))?;
     if !resp.status().is_success() {
@@ -142,9 +160,14 @@ pub async fn find_mod(http: &Http, project: &str, class_id: u32) -> Result<Mod> 
     if let Ok(id) = project.parse::<u64>() {
         return get(http, &format!("{API}/mods/{id}")).await;
     }
-    let url = format!("{API}/mods/search?gameId={GAME_MINECRAFT}&classId={class_id}&slug={}", super::modrinth::urlencode(project));
+    let url = format!(
+        "{API}/mods/search?gameId={GAME_MINECRAFT}&classId={class_id}&slug={}",
+        super::modrinth::urlencode(project)
+    );
     let mods: Vec<Mod> = get(http, &url).await?;
-    mods.into_iter().next().with_context(|| format!("CurseForge project {project} not found"))
+    mods.into_iter()
+        .next()
+        .with_context(|| format!("CurseForge project {project} not found"))
 }
 
 pub async fn file(http: &Http, mod_id: u64, file_id: u64) -> Result<File> {
@@ -167,7 +190,12 @@ pub async fn latest_file(http: &Http, mod_id: u64) -> Result<File> {
 pub async fn files(http: &Http, ids: &[u64]) -> Result<Vec<File>> {
     let mut out = vec![];
     for chunk in ids.chunks(500) {
-        let mut part: Vec<File> = post(http, &format!("{API}/mods/files"), serde_json::json!({ "fileIds": chunk })).await?;
+        let mut part: Vec<File> = post(
+            http,
+            &format!("{API}/mods/files"),
+            serde_json::json!({ "fileIds": chunk }),
+        )
+        .await?;
         out.append(&mut part);
     }
     Ok(out)
@@ -176,7 +204,12 @@ pub async fn files(http: &Http, ids: &[u64]) -> Result<Vec<File>> {
 pub async fn mods(http: &Http, ids: &[u64]) -> Result<Vec<Mod>> {
     let mut out = vec![];
     for chunk in ids.chunks(500) {
-        let mut part: Vec<Mod> = post(http, &format!("{API}/mods"), serde_json::json!({ "modIds": chunk })).await?;
+        let mut part: Vec<Mod> = post(
+            http,
+            &format!("{API}/mods"),
+            serde_json::json!({ "modIds": chunk }),
+        )
+        .await?;
         out.append(&mut part);
     }
     Ok(out)
@@ -233,7 +266,12 @@ fn yes() -> bool {
 impl Manifest {
     /// Parse `forge-47.2.0` / `neoforge-21.1.77` / `fabric-0.16.9`.
     pub fn loader(&self) -> Option<(Loader, String)> {
-        let l = self.minecraft.mod_loaders.iter().find(|l| l.primary).or(self.minecraft.mod_loaders.first())?;
+        let l = self
+            .minecraft
+            .mod_loaders
+            .iter()
+            .find(|l| l.primary)
+            .or(self.minecraft.mod_loaders.first())?;
         let (name, version) = l.id.split_once('-')?;
         Some((Loader::parse(name)?, version.to_string()))
     }

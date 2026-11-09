@@ -63,23 +63,38 @@ pub struct Dependency {
 
 impl Version {
     pub fn primary_file(&self) -> Option<&VersionFile> {
-        self.files.iter().find(|f| f.primary).or_else(|| self.files.first())
+        self.files
+            .iter()
+            .find(|f| f.primary)
+            .or_else(|| self.files.first())
     }
 }
 
 pub async fn project(http: &Http, id_or_slug: &str) -> Result<Project> {
-    http.get_json(&format!("{API}/project/{}", urlencode(id_or_slug))).await
+    http.get_json(&format!("{API}/project/{}", urlencode(id_or_slug)))
+        .await
 }
 
 /// Versions of a project, newest first, optionally filtered.
-pub async fn versions(http: &Http, project: &str, loaders: &[&str], game_versions: &[&str]) -> Result<Vec<Version>> {
+pub async fn versions(
+    http: &Http,
+    project: &str,
+    loaders: &[&str],
+    game_versions: &[&str],
+) -> Result<Vec<Version>> {
     let mut url = format!("{API}/project/{}/version", urlencode(project));
     let mut q = vec![];
     if !loaders.is_empty() {
-        q.push(format!("loaders={}", urlencode(&serde_json::to_string(loaders)?)));
+        q.push(format!(
+            "loaders={}",
+            urlencode(&serde_json::to_string(loaders)?)
+        ));
     }
     if !game_versions.is_empty() {
-        q.push(format!("game_versions={}", urlencode(&serde_json::to_string(game_versions)?)));
+        q.push(format!(
+            "game_versions={}",
+            urlencode(&serde_json::to_string(game_versions)?)
+        ));
     }
     if !q.is_empty() {
         url.push('?');
@@ -89,7 +104,8 @@ pub async fn versions(http: &Http, project: &str, loaders: &[&str], game_version
 }
 
 pub async fn version(http: &Http, id: &str) -> Result<Version> {
-    http.get_json(&format!("{API}/version/{}", urlencode(id))).await
+    http.get_json(&format!("{API}/version/{}", urlencode(id)))
+        .await
 }
 
 /// Pick a version: exact id / version number when pinned, otherwise the newest release
@@ -101,7 +117,11 @@ pub fn pick<'a>(versions: &'a [Version], wanted: Option<&str>) -> Result<&'a Ver
             .find(|v| v.id == w || v.version_number == w || v.name == w)
             .with_context(|| format!("version {w} not found"));
     }
-    match versions.iter().find(|v| v.version_type == "release").or_else(|| versions.first()) {
+    match versions
+        .iter()
+        .find(|v| v.version_type == "release")
+        .or_else(|| versions.first())
+    {
         Some(v) => Ok(v),
         None => bail!("no versions available"),
     }
@@ -150,7 +170,12 @@ struct SearchResp {
     hits: Vec<SearchHit>,
 }
 
-pub async fn search(http: &Http, query: &str, project_type: &str, limit: u32) -> Result<Vec<SearchHit>> {
+pub async fn search(
+    http: &Http,
+    query: &str,
+    project_type: &str,
+    limit: u32,
+) -> Result<Vec<SearchHit>> {
     let facets = format!("[[\"project_type:{project_type}\"],[\"server_side!=unsupported\"]]");
     let url = format!(
         "{API}/search?query={}&facets={}&limit={limit}&index=relevance",
@@ -164,7 +189,9 @@ pub fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -223,15 +250,19 @@ impl PackIndex {
 }
 
 /// Identify files by SHA-1 (used to detect mods a modpack already ships).
-pub async fn versions_by_hash(http: &Http, sha1s: &[String]) -> Result<std::collections::HashMap<String, Version>> {
+pub async fn versions_by_hash(
+    http: &Http,
+    sha1s: &[String],
+) -> Result<std::collections::HashMap<String, Version>> {
     if sha1s.is_empty() {
         return Ok(Default::default());
     }
     let resp = http
-        .client
-        .post(format!("{API}/version_files"))
-        .json(&serde_json::json!({ "hashes": sha1s, "algorithm": "sha1" }))
-        .send()
+        .send(
+            http.client
+                .post(format!("{API}/version_files"))
+                .json(&serde_json::json!({ "hashes": sha1s, "algorithm": "sha1" })),
+        )
         .await?;
     if !resp.status().is_success() {
         bail!("Modrinth hash lookup: HTTP {}", resp.status());
@@ -243,7 +274,10 @@ pub async fn versions_by_hash(http: &Http, sha1s: &[String]) -> Result<std::coll
 pub async fn projects(http: &Http, ids: &[String]) -> Result<Vec<Project>> {
     let mut out = vec![];
     for chunk in ids.chunks(400) {
-        let url = format!("{API}/projects?ids={}", urlencode(&serde_json::to_string(chunk)?));
+        let url = format!(
+            "{API}/projects?ids={}",
+            urlencode(&serde_json::to_string(chunk)?)
+        );
         out.extend(http.get_json::<Vec<Project>>(&url).await?);
     }
     Ok(out)
