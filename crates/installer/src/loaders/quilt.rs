@@ -22,14 +22,20 @@ async fn install(ctx: &Ctx, mc: &str, loader: Option<&str>) -> Result<LaunchSpec
     let loader = match loader {
         Some(l) => l.to_string(),
         None => {
-            let list: Vec<QuiltVersion> = ctx.http.get_json(&format!("{META}/versions/loader")).await?;
+            let list: Vec<QuiltVersion> = ctx
+                .http
+                .get_json(&format!("{META}/versions/loader"))
+                .await?;
             list.iter()
                 .find(|v| !v.version.contains('-'))
                 .map(|v| v.version.clone())
                 .context("no Quilt loader versions")?
         }
     };
-    let installers: Vec<QuiltVersion> = ctx.http.get_json(&format!("{META}/versions/installer")).await?;
+    let installers: Vec<QuiltVersion> = ctx
+        .http
+        .get_json(&format!("{META}/versions/installer"))
+        .await?;
     // Like the loader: skip pre-releases (`-beta.1`), which Quilt's meta lists first.
     let inst = installers
         .iter()
@@ -37,7 +43,13 @@ async fn install(ctx: &Ctx, mc: &str, loader: Option<&str>) -> Result<LaunchSpec
         .or(installers.first())
         .and_then(|i| i.url.clone())
         .context("no Quilt installer")?;
-    let jar = fetch_temp(ctx, &inst, "quilt-installer.jar", maven_sha1(ctx, &inst).await).await?;
+    let jar = fetch_temp(
+        ctx,
+        &inst,
+        "quilt-installer.jar",
+        maven_sha1(ctx, &inst).await,
+    )
+    .await?;
     let dir = ctx.root.to_string_lossy().to_string();
     java(
         &ctx.root,
@@ -63,7 +75,12 @@ impl LoaderInstaller for Quilt {
         Loader::Quilt
     }
 
-    fn install<'a>(&'a self, ctx: &'a Ctx, mc: &'a str, version: Option<&'a str>) -> BoxFuture<'a, Result<LaunchSpec>> {
+    fn install<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        mc: &'a str,
+        version: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<LaunchSpec>> {
         Box::pin(install(ctx, mc, version))
     }
 }

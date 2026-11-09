@@ -31,7 +31,11 @@ impl Drop for Server {
 impl Server {
     /// `script` runs as `java`, in the data directory, and must `: > started` once it is set up.
     fn start(script: &str, stop_timeout_secs: u32) -> Self {
-        let dir = std::env::temp_dir().join(format!("cubeharbor-runner-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let dir = std::env::temp_dir().join(format!(
+            "cubeharbor-runner-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(dir.join(".cubeharbor")).unwrap();
         std::fs::write(dir.join(".cubeharbor/launch.json"), r#"{"javaArgs":[]}"#).unwrap();
         let java = dir.join("fake-java");
@@ -52,12 +56,18 @@ impl Server {
     }
 
     fn wait_started(&self) {
-        wait_for(|| self.dir.join("started").exists(), "the fake server to start");
+        wait_for(
+            || self.dir.join("started").exists(),
+            "the fake server to start",
+        );
     }
 
     fn signal(&self, sig: libc::c_int) {
         // SAFETY: `kill` has no memory-safety requirements; the child hasn't been waited on.
-        assert_eq!(unsafe { libc::kill(self.child.id() as libc::pid_t, sig) }, 0);
+        assert_eq!(
+            unsafe { libc::kill(self.child.id() as libc::pid_t, sig) },
+            0
+        );
     }
 
     fn exit_code(&mut self) -> i32 {
@@ -66,7 +76,10 @@ impl Server {
             if let Some(status) = self.child.try_wait().unwrap() {
                 return status.code().expect("the runner exits, it isn't killed");
             }
-            assert!(started.elapsed() < Duration::from_secs(20), "runner did not exit");
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "runner did not exit"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -79,7 +92,10 @@ impl Server {
 fn wait_for(cond: impl Fn() -> bool, what: &str) {
     let started = Instant::now();
     while !cond() {
-        assert!(started.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timed out waiting for {what}"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -104,7 +120,10 @@ fn death_by_signal_is_reported_as_128_plus_signal() {
 #[test]
 fn sigterm_becomes_a_console_stop() {
     let _l = lock();
-    let mut s = Server::start(": > started\nwhile read -r l; do if [ \"$l\" = stop ]; then : > got-stop; exit 7; fi; done", 10);
+    let mut s = Server::start(
+        ": > started\nwhile read -r l; do if [ \"$l\" = stop ]; then : > got-stop; exit 7; fi; done",
+        10,
+    );
     s.wait_started();
     s.signal(libc::SIGTERM);
     assert_eq!(s.exit_code(), 7);
@@ -114,7 +133,10 @@ fn sigterm_becomes_a_console_stop() {
 #[test]
 fn sigint_also_stops_the_server() {
     let _l = lock();
-    let mut s = Server::start(": > started\nwhile read -r l; do [ \"$l\" = stop ] && exit 0; done", 10);
+    let mut s = Server::start(
+        ": > started\nwhile read -r l; do [ \"$l\" = stop ] && exit 0; done",
+        10,
+    );
     s.wait_started();
     s.signal(libc::SIGINT);
     assert_eq!(s.exit_code(), 0);
@@ -123,9 +145,17 @@ fn sigint_also_stops_the_server() {
 #[test]
 fn stdin_reaches_the_console() {
     let _l = lock();
-    let mut s = Server::start(": > started\nwhile read -r l; do if [ \"$l\" = hello ]; then exit 9; fi; done", 10);
+    let mut s = Server::start(
+        ": > started\nwhile read -r l; do if [ \"$l\" = hello ]; then exit 9; fi; done",
+        10,
+    );
     s.wait_started();
-    s.child.stdin.as_mut().unwrap().write_all(b"hello\n").unwrap();
+    s.child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"hello\n")
+        .unwrap();
     assert_eq!(s.exit_code(), 9);
 }
 
@@ -146,7 +176,11 @@ fn a_server_ignoring_everything_is_killed() {
     let started = Instant::now();
     s.signal(libc::SIGTERM);
     assert_eq!(s.exit_code(), 137);
-    assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
 }
 
 /// The console pipe is full because the server stopped reading: shutdown must still work.
@@ -160,7 +194,11 @@ fn a_full_console_pipe_does_not_block_shutdown() {
     std::thread::spawn(move || {
         // Far more than the 64 KiB pipe plus the runner's queue. Blocks when everything is full.
         for _ in 0..1024 {
-            if stdin.write_all(&line).and_then(|()| stdin.write_all(b"\n")).is_err() {
+            if stdin
+                .write_all(&line)
+                .and_then(|()| stdin.write_all(b"\n"))
+                .is_err()
+            {
                 break;
             }
         }

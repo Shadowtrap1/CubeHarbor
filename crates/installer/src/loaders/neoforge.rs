@@ -29,8 +29,18 @@ async fn install(ctx: &Ctx, mc: &str, version: Option<&str>) -> Result<LaunchSpe
         // NeoForge for 1.20.1 was published under the legacy Forge coordinates.
         let v = version.context("NeoForge 1.20.1 needs an explicit loaderVersion")?;
         let full = format!("1.20.1-{}", v.trim_start_matches("1.20.1-"));
-        run_installer(ctx, &format!("{MAVEN}/forge/{full}/forge-{full}-installer.jar"), "neoforge-installer.jar").await?;
-        return launch_from_install(&ctx.root, &[format!("libraries/net/neoforged/forge/{full}")], &[]).await;
+        run_installer(
+            ctx,
+            &format!("{MAVEN}/forge/{full}/forge-{full}-installer.jar"),
+            "neoforge-installer.jar",
+        )
+        .await?;
+        return launch_from_install(
+            &ctx.root,
+            &[format!("libraries/net/neoforged/forge/{full}")],
+            &[],
+        )
+        .await;
     }
     let v = match version {
         Some(v) => v.to_string(),
@@ -38,7 +48,11 @@ async fn install(ctx: &Ctx, mc: &str, version: Option<&str>) -> Result<LaunchSpe
             let list: MavenVersions =
                 ctx.http.get_json("https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge").await?;
             let prefix = neoforge_prefix(mc);
-            let matching: Vec<&String> = list.versions.iter().filter(|v| v.starts_with(&prefix)).collect();
+            let matching: Vec<&String> = list
+                .versions
+                .iter()
+                .filter(|v| v.starts_with(&prefix))
+                .collect();
             matching
                 .iter()
                 .rev()
@@ -48,8 +62,18 @@ async fn install(ctx: &Ctx, mc: &str, version: Option<&str>) -> Result<LaunchSpe
                 .with_context(|| format!("NeoForge does not support Minecraft {mc}"))?
         }
     };
-    run_installer(ctx, &format!("{MAVEN}/neoforge/{v}/neoforge-{v}-installer.jar"), "neoforge-installer.jar").await?;
-    launch_from_install(&ctx.root, &[format!("libraries/net/neoforged/neoforge/{v}")], &[]).await
+    run_installer(
+        ctx,
+        &format!("{MAVEN}/neoforge/{v}/neoforge-{v}-installer.jar"),
+        "neoforge-installer.jar",
+    )
+    .await?;
+    launch_from_install(
+        &ctx.root,
+        &[format!("libraries/net/neoforged/neoforge/{v}")],
+        &[],
+    )
+    .await
 }
 
 pub struct NeoForge;
@@ -59,7 +83,12 @@ impl LoaderInstaller for NeoForge {
         Loader::NeoForge
     }
 
-    fn install<'a>(&'a self, ctx: &'a Ctx, mc: &'a str, version: Option<&'a str>) -> BoxFuture<'a, Result<LaunchSpec>> {
+    fn install<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        mc: &'a str,
+        version: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<LaunchSpec>> {
         Box::pin(install(ctx, mc, version))
     }
 }

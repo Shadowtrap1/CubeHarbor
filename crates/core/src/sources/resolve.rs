@@ -51,9 +51,15 @@ async fn resolve_modpack(
     src: &crate::crd::ModpackSource,
 ) -> Result<(ResolvedModpack, Option<String>, Option<Loader>)> {
     if let Some(m) = &src.modrinth {
-        let project = modrinth::project(http, &m.project).await.with_context(|| format!("Modrinth project {}", m.project))?;
+        let project = modrinth::project(http, &m.project)
+            .await
+            .with_context(|| format!("Modrinth project {}", m.project))?;
         if project.project_type != "modpack" {
-            bail!("Modrinth project {} is a {}, not a modpack", m.project, project.project_type);
+            bail!(
+                "Modrinth project {} is a {}, not a modpack",
+                m.project,
+                project.project_type
+            );
         }
         let versions = modrinth::versions(http, &project.id, &[], &[]).await?;
         let v = modrinth::pick(&versions, m.version.as_deref())?;
@@ -107,7 +113,11 @@ async fn resolve_modpack(
 
     if let Some(url) = &src.url {
         let path = url.split('?').next().unwrap_or(url);
-        let kind = if path.ends_with(".mrpack") { ModpackKind::Mrpack } else { ModpackKind::ServerZip };
+        let kind = if path.ends_with(".mrpack") {
+            ModpackKind::Mrpack
+        } else {
+            ModpackKind::ServerZip
+        };
         let name = path.rsplit('/').next().unwrap_or("modpack").to_string();
         // Version/loader for raw URLs come from the spec or from the pack index at install time.
         return Ok((

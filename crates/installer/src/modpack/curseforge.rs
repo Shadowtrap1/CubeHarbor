@@ -15,14 +15,25 @@ use crate::download::{Item, fetch_all, fetch_temp, safe_join};
 /// `manifest.json`'s `overrides` folder, as an archive prefix.
 fn overrides_prefix(overrides: &str) -> Result<String> {
     let dir = overrides.replace('\\', "/");
-    anyhow::ensure!(!dir.starts_with('/') && !dir.split('/').any(|p| p == ".."), "invalid overrides folder `{overrides}`");
+    anyhow::ensure!(
+        !dir.starts_with('/') && !dir.split('/').any(|p| p == ".."),
+        "invalid overrides folder `{overrides}`"
+    );
     Ok(format!("{}/", dir.trim_end_matches('/')))
 }
 
 async fn install(ctx: &Ctx, input: &PackInput<'_>) -> Result<PackResult> {
-    let PackInput { pack, archive, exclude, include } = *input;
-    let raw = archive::read_entry(archive, "manifest.json").await?.context("CurseForge pack has no manifest.json")?;
-    let manifest: curseforge::Manifest = serde_json::from_slice(&raw).context("parsing manifest.json")?;
+    let PackInput {
+        pack,
+        archive,
+        exclude,
+        include,
+    } = *input;
+    let raw = archive::read_entry(archive, "manifest.json")
+        .await?
+        .context("CurseForge pack has no manifest.json")?;
+    let manifest: curseforge::Manifest =
+        serde_json::from_slice(&raw).context("parsing manifest.json")?;
     let loader = manifest.loader();
     let mc = Some(manifest.minecraft.version.clone());
 
@@ -31,17 +42,36 @@ async fn install(ctx: &Ctx, input: &PackInput<'_>) -> Result<PackResult> {
         tracing::info!("using the published server pack");
         let sp = fetch_temp(ctx, url, "serverpack.zip", None).await?;
         let files = archive::extract(&sp, "", &ctx.root, true, exclude.to_vec()).await?;
-        return Ok(PackResult { minecraft_version: mc, loader, files, server_pack: true });
+        return Ok(PackResult {
+            minecraft_version: mc,
+            loader,
+            files,
+            server_pack: true,
+        });
     }
 
-    tracing::info!("building server from manifest ({} mods)", manifest.files.len());
-    let ids: Vec<u64> = manifest.files.iter().filter(|f| f.required).map(|f| f.file_id).collect();
+    tracing::info!(
+        "building server from manifest ({} mods)",
+        manifest.files.len()
+    );
+    let ids: Vec<u64> = manifest
+        .files
+        .iter()
+        .filter(|f| f.required)
+        .map(|f| f.file_id)
+        .collect();
     let infos = curseforge::files(&ctx.http, &ids).await?;
     let mod_ids: Vec<u64> = infos.iter().map(|f| f.mod_id).collect();
-    let classes: HashMap<u64, Option<u32>> =
-        curseforge::mods(&ctx.http, &mod_ids).await?.into_iter().map(|m| (m.id, m.class_id)).collect();
+    let classes: HashMap<u64, Option<u32>> = curseforge::mods(&ctx.http, &mod_ids)
+        .await?
+        .into_iter()
+        .map(|m| (m.id, m.class_id))
+        .collect();
 
-    let candidates: Vec<(String, Option<String>)> = infos.iter().map(|f| (f.file_name.clone(), f.sha1().map(str::to_string))).collect();
+    let candidates: Vec<(String, Option<String>)> = infos
+        .iter()
+        .map(|f| (f.file_name.clone(), f.sha1().map(str::to_string)))
+        .collect();
     let client_only = client_only_files(ctx, &candidates, include).await;
 
     let mut items = vec![];
@@ -58,7 +88,9 @@ async fn install(ctx: &Ctx, input: &PackInput<'_>) -> Result<PackResult> {
             // Resource packs, shaders and worlds are client-side.
             Some(_) => continue,
         };
-        if (f.client_only() || is_client_only(&lower)) && !include.iter().any(|i| excluded(&lower, i)) {
+        if (f.client_only() || is_client_only(&lower))
+            && !include.iter().any(|i| excluded(&lower, i))
+        {
             tracing::info!("  skipping {} (client-only)", f.file_name);
             continue;
         }
@@ -79,9 +111,15 @@ async fn install(ctx: &Ctx, input: &PackInput<'_>) -> Result<PackResult> {
     fetch_all(ctx, items, "mods").await?;
 
     let prefix = overrides_prefix(&manifest.overrides)?;
-    let mut written = archive::extract(archive, &prefix, &ctx.root, false, exclude.to_vec()).await?;
+    let mut written =
+        archive::extract(archive, &prefix, &ctx.root, false, exclude.to_vec()).await?;
     files.append(&mut written);
-    Ok(PackResult { minecraft_version: mc, loader, files, server_pack: false })
+    Ok(PackResult {
+        minecraft_version: mc,
+        loader,
+        files,
+        server_pack: false,
+    })
 }
 
 pub struct CurseForge;
@@ -95,7 +133,11 @@ impl PackFormat for CurseForge {
         Box::pin(async move { Ok(input.pack.kind == ModpackKind::CurseForge) })
     }
 
-    fn install<'a>(&'a self, ctx: &'a Ctx, input: &'a PackInput<'a>) -> BoxFuture<'a, Result<PackResult>> {
+    fn install<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        input: &'a PackInput<'a>,
+    ) -> BoxFuture<'a, Result<PackResult>> {
         Box::pin(install(ctx, input))
     }
 }
@@ -107,7 +149,10 @@ mod tests {
     #[test]
     fn overrides_folder() {
         assert_eq!(overrides_prefix("overrides").unwrap(), "overrides/");
-        assert_eq!(overrides_prefix("server/overrides/").unwrap(), "server/overrides/");
+        assert_eq!(
+            overrides_prefix("server/overrides/").unwrap(),
+            "server/overrides/"
+        );
         for bad in ["../..", "a/../../b", "/etc", "..\\x"] {
             assert!(overrides_prefix(bad).is_err(), "{bad}");
         }

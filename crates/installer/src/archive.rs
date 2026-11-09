@@ -21,8 +21,14 @@ struct Limits {
 impl Limits {
     /// `CUBEHARBOR_MAX_EXTRACT_MIB`, default 32 GiB.
     fn from_env() -> Self {
-        let mib = std::env::var("CUBEHARBOR_MAX_EXTRACT_MIB").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(32 * 1024);
-        Self { entries: MAX_ENTRIES, bytes: mib.saturating_mul(1024 * 1024) }
+        let mib = std::env::var("CUBEHARBOR_MAX_EXTRACT_MIB")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(32 * 1024);
+        Self {
+            entries: MAX_ENTRIES,
+            bytes: mib.saturating_mul(1024 * 1024),
+        }
     }
 }
 
@@ -40,7 +46,12 @@ fn read_entry_blocking(zip: &Path, name: &str, limit: u64) -> Result<Option<Vec<
             let mut buf = vec![];
             // The header's size can lie, so count what actually comes out.
             f.take(limit + 1).read_to_end(&mut buf)?;
-            anyhow::ensure!(buf.len() as u64 <= limit, "{name} in {} is larger than {} MiB", zip.display(), limit / 1024 / 1024);
+            anyhow::ensure!(
+                buf.len() as u64 <= limit,
+                "{name} in {} is larger than {} MiB",
+                zip.display(),
+                limit / 1024 / 1024
+            );
             Some(buf)
         }
         Err(zip::result::ZipError::FileNotFound) => None,
@@ -53,15 +64,40 @@ fn read_entry_blocking(zip: &Path, name: &str, limit: u64) -> Result<Option<Vec<
 ///
 /// With `strip_single_root`, an archive whose entries all live in one top-level folder
 /// (common for server packs) is extracted as if that folder were the root.
-pub async fn extract(zip: &Path, prefix: &str, dest: &Path, strip_single_root: bool, skip: Vec<String>) -> Result<Vec<String>> {
+pub async fn extract(
+    zip: &Path,
+    prefix: &str,
+    dest: &Path,
+    strip_single_root: bool,
+    skip: Vec<String>,
+) -> Result<Vec<String>> {
     let zip = zip.to_path_buf();
     let prefix = prefix.to_string();
     let dest = dest.to_path_buf();
-    tokio::task::spawn_blocking(move || extract_blocking(&zip, &prefix, &dest, strip_single_root, &skip, Limits::from_env())).await?
+    tokio::task::spawn_blocking(move || {
+        extract_blocking(
+            &zip,
+            &prefix,
+            &dest,
+            strip_single_root,
+            &skip,
+            Limits::from_env(),
+        )
+    })
+    .await?
 }
 
-fn extract_blocking(zip: &Path, prefix: &str, dest: &Path, strip_single_root: bool, skip: &[String], limits: Limits) -> Result<Vec<String>> {
-    let mut a = zip::ZipArchive::new(std::fs::File::open(zip).with_context(|| format!("opening {}", zip.display()))?)?;
+fn extract_blocking(
+    zip: &Path,
+    prefix: &str,
+    dest: &Path,
+    strip_single_root: bool,
+    skip: &[String],
+    limits: Limits,
+) -> Result<Vec<String>> {
+    let mut a = zip::ZipArchive::new(
+        std::fs::File::open(zip).with_context(|| format!("opening {}", zip.display()))?,
+    )?;
     let mut prefix = prefix.to_string();
     if strip_single_root
         && prefix.is_empty()
@@ -69,8 +105,20 @@ fn extract_blocking(zip: &Path, prefix: &str, dest: &Path, strip_single_root: bo
     {
         prefix = root;
     }
-    anyhow::ensure!(a.len() <= limits.entries, "{} has {} entries (limit {})", zip.display(), a.len(), limits.entries);
-    let too_big = || format!("{} unpacks to more than {} MiB", zip.display(), limits.bytes / 1024 / 1024);
+    anyhow::ensure!(
+        a.len() <= limits.entries,
+        "{} has {} entries (limit {})",
+        zip.display(),
+        a.len(),
+        limits.entries
+    );
+    let too_big = || {
+        format!(
+            "{} unpacks to more than {} MiB",
+            zip.display(),
+            limits.bytes / 1024 / 1024
+        )
+    };
     let excluded = |rel: &str| {
         let lower = rel.to_ascii_lowercase();
         skip.iter().any(|s| crate::modpack::excluded(&lower, s))
@@ -81,7 +129,9 @@ fn extract_blocking(zip: &Path, prefix: &str, dest: &Path, strip_single_root: bo
     for i in 0..a.len() {
         let entry = a.by_index_raw(i)?;
         let name = entry.name()?.replace('\\', "/");
-        let Some(rel) = name.strip_prefix(&prefix) else { continue };
+        let Some(rel) = name.strip_prefix(&prefix) else {
+            continue;
+        };
         if rel.is_empty() || entry.is_dir() {
             continue;
         }
@@ -97,7 +147,9 @@ fn extract_blocking(zip: &Path, prefix: &str, dest: &Path, strip_single_root: bo
     for i in 0..a.len() {
         let mut entry = a.by_index(i)?;
         let name = entry.name()?.replace('\\', "/");
-        let Some(rel) = name.strip_prefix(&prefix) else { continue };
+        let Some(rel) = name.strip_prefix(&prefix) else {
+            continue;
+        };
         if rel.is_empty() || entry.is_dir() {
             continue;
         }
@@ -118,7 +170,11 @@ fn extract_blocking(zip: &Path, prefix: &str, dest: &Path, strip_single_root: bo
         let tmp = part_path(&out);
         let _ = std::fs::remove_file(&tmp);
         let guard = TempGuard::new(tmp.clone());
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .with_context(|| format!("creating {}", tmp.display()))?;
         // Declared sizes can lie, so the limit is enforced on the real output too.
         let n = std::io::copy(&mut (&mut entry).take(limits.bytes - unpacked + 1), &mut f)?;
         unpacked += n;
@@ -127,7 +183,10 @@ fn extract_blocking(zip: &Path, prefix: &str, dest: &Path, strip_single_root: bo
         #[cfg(unix)]
         if let Some(mode) = entry.unix_mode() {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode & 0o755 | 0o600));
+            let _ = std::fs::set_permissions(
+                &tmp,
+                std::fs::Permissions::from_mode(mode & 0o755 | 0o600),
+            );
         }
         std::fs::rename(&tmp, &out).with_context(|| format!("writing {}", out.display()))?;
         guard.disarm();
@@ -162,7 +221,10 @@ mod tests {
     use super::*;
     use crate::testutil::TempDir;
 
-    const LIMITS: Limits = Limits { entries: 100, bytes: 1024 * 1024 };
+    const LIMITS: Limits = Limits {
+        entries: 100,
+        bytes: 1024 * 1024,
+    };
 
     fn opts() -> SimpleFileOptions {
         SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated)
@@ -196,7 +258,13 @@ mod tests {
                 if e.path().is_dir() && !e.path().is_symlink() {
                     walk(&e.path(), base, out);
                 } else {
-                    out.push(e.path().strip_prefix(base).unwrap().to_string_lossy().to_string());
+                    out.push(
+                        e.path()
+                            .strip_prefix(base)
+                            .unwrap()
+                            .to_string_lossy()
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -222,7 +290,16 @@ mod tests {
 
     #[test]
     fn hostile_names_refuse_the_whole_archive() {
-        for bad in ["../evil", "a/../../evil", "..\\..\\evil", "/etc/evil", "\\etc\\evil", "C:/evil", ".cubeharbor/launch.json", "./.cubeharbor/launch.json"] {
+        for bad in [
+            "../evil",
+            "a/../../evil",
+            "..\\..\\evil",
+            "/etc/evil",
+            "\\etc\\evil",
+            "C:/evil",
+            ".cubeharbor/launch.json",
+            "./.cubeharbor/launch.json",
+        ] {
             let tmp = TempDir::new();
             let dest = tmp.path().join("server");
             std::fs::create_dir_all(&dest).unwrap();
@@ -255,7 +332,13 @@ mod tests {
     fn single_root_is_stripped() {
         let tmp = TempDir::new();
         let dest = tmp.path().join("server");
-        let z = zip_of(&tmp, &[("Pack-1.0/mods/a.jar", b"x"), ("Pack-1.0/server.properties", b"y")]);
+        let z = zip_of(
+            &tmp,
+            &[
+                ("Pack-1.0/mods/a.jar", b"x"),
+                ("Pack-1.0/server.properties", b"y"),
+            ],
+        );
         extract(&z, &dest, true).unwrap();
         assert_eq!(tree(&dest), ["mods/a.jar", "server.properties"]);
     }
@@ -298,8 +381,16 @@ mod tests {
         let z = zip_of(&tmp2, &[("config.txt", b"new")]);
         extract(&z, &dest, false).unwrap();
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "original");
-        assert!(!std::fs::symlink_metadata(dest.join("config.txt")).unwrap().file_type().is_symlink());
-        assert_eq!(std::fs::read_to_string(dest.join("config.txt")).unwrap(), "new");
+        assert!(
+            !std::fs::symlink_metadata(dest.join("config.txt"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("config.txt")).unwrap(),
+            "new"
+        );
     }
 
     #[test]
@@ -308,8 +399,16 @@ mod tests {
         let dest = tmp.path().join("server");
         let zeros = vec![0u8; 2 * 1024 * 1024];
         let z = zip_of(&tmp, &[("bomb.bin", &zeros)]);
-        assert!(std::fs::metadata(&z).unwrap().len() < 64 * 1024, "the fixture really is compressed");
-        assert!(extract(&z, &dest, false).unwrap_err().to_string().contains("MiB"));
+        assert!(
+            std::fs::metadata(&z).unwrap().len() < 64 * 1024,
+            "the fixture really is compressed"
+        );
+        assert!(
+            extract(&z, &dest, false)
+                .unwrap_err()
+                .to_string()
+                .contains("MiB")
+        );
         assert!(!dest.exists() || tree(&dest).is_empty());
     }
 
@@ -325,7 +424,11 @@ mod tests {
         raw[cd + 24..cd + 28].copy_from_slice(&10u32.to_le_bytes());
         std::fs::write(&z, raw).unwrap();
         assert!(extract(&z, &dest, false).is_err());
-        assert!(!dest.exists() || tree(&dest).is_empty(), "no partial output: {:?}", tree(&dest));
+        assert!(
+            !dest.exists() || tree(&dest).is_empty(),
+            "no partial output: {:?}",
+            tree(&dest)
+        );
     }
 
     #[test]
@@ -336,7 +439,12 @@ mod tests {
                 w.start_file(format!("f{i}"), opts()).unwrap();
             }
         });
-        assert!(extract(&z, &tmp.path().join("server"), false).unwrap_err().to_string().contains("entries"));
+        assert!(
+            extract(&z, &tmp.path().join("server"), false)
+                .unwrap_err()
+                .to_string()
+                .contains("entries")
+        );
     }
 
     #[test]
@@ -344,7 +452,13 @@ mod tests {
         let tmp = TempDir::new();
         let z = zip_of(&tmp, &[("modrinth.index.json", &vec![b' '; 4096])]);
         assert!(read_entry_blocking(&z, "modrinth.index.json", 1024).is_err());
-        assert_eq!(read_entry_blocking(&z, "modrinth.index.json", 4096).unwrap().unwrap().len(), 4096);
+        assert_eq!(
+            read_entry_blocking(&z, "modrinth.index.json", 4096)
+                .unwrap()
+                .unwrap()
+                .len(),
+            4096
+        );
         assert!(read_entry_blocking(&z, "missing", 1024).unwrap().is_none());
     }
 

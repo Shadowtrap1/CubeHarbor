@@ -30,13 +30,19 @@ async fn install(ctx: &Ctx, mc: &str, version: Option<&str>) -> Result<LaunchSpe
         }
     };
     let full = format!("{mc}-{v}");
-    let url = format!("https://maven.minecraftforge.net/net/minecraftforge/forge/{full}/forge-{full}-installer.jar");
+    let url = format!(
+        "https://maven.minecraftforge.net/net/minecraftforge/forge/{full}/forge-{full}-installer.jar"
+    );
     run_installer(ctx, &url, "forge-installer.jar").await?;
-    launch_from_install(&ctx.root, &[format!("libraries/net/minecraftforge/forge/{full}")], &[
-        format!("forge-{full}-shim.jar"),
-        format!("forge-{full}.jar"),
-        format!("forge-{full}-universal.jar"),
-    ])
+    launch_from_install(
+        &ctx.root,
+        &[format!("libraries/net/minecraftforge/forge/{full}")],
+        &[
+            format!("forge-{full}-shim.jar"),
+            format!("forge-{full}.jar"),
+            format!("forge-{full}-universal.jar"),
+        ],
+    )
     .await
 }
 
@@ -47,7 +53,12 @@ impl LoaderInstaller for Forge {
         Loader::Forge
     }
 
-    fn install<'a>(&'a self, ctx: &'a Ctx, mc: &'a str, version: Option<&'a str>) -> BoxFuture<'a, Result<LaunchSpec>> {
+    fn install<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        mc: &'a str,
+        version: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<LaunchSpec>> {
         Box::pin(install(ctx, mc, version))
     }
 }

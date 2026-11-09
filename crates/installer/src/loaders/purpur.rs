@@ -21,9 +21,15 @@ struct PurpurBuild {
 async fn install(ctx: &Ctx, mc: &str, build: Option<&str>) -> Result<LaunchSpec> {
     let wanted = build.unwrap_or("latest");
     // Pin to the concrete build the checksum belongs to: `latest` can move between the two calls.
-    let info = ctx.http.get_json::<PurpurBuild>(&format!("https://api.purpurmc.org/v2/purpur/{mc}/{wanted}")).await;
+    let info = ctx
+        .http
+        .get_json::<PurpurBuild>(&format!("https://api.purpurmc.org/v2/purpur/{mc}/{wanted}"))
+        .await;
     let (id, md5) = match info {
-        Ok(b) => (b.build.unwrap_or_else(|| wanted.to_string()), b.md5.filter(|h| is_hex(h, 32))),
+        Ok(b) => (
+            b.build.unwrap_or_else(|| wanted.to_string()),
+            b.md5.filter(|h| is_hex(h, 32)),
+        ),
         Err(e) => {
             tracing::warn!("no checksum for Purpur {wanted}: {e:#}");
             (wanted.to_string(), None)
@@ -41,7 +47,12 @@ impl LoaderInstaller for Purpur {
         Loader::Purpur
     }
 
-    fn install<'a>(&'a self, ctx: &'a Ctx, mc: &'a str, version: Option<&'a str>) -> BoxFuture<'a, Result<LaunchSpec>> {
+    fn install<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        mc: &'a str,
+        version: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<LaunchSpec>> {
         Box::pin(install(ctx, mc, version))
     }
 }

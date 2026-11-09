@@ -11,17 +11,30 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::de::DeserializeOwned;
 
-pub const USER_AGENT: &str = concat!("cubeharbor/", env!("CARGO_PKG_VERSION"), " (+", env!("CARGO_PKG_REPOSITORY"), ")");
+pub const USER_AGENT: &str = concat!(
+    "cubeharbor/",
+    env!("CARGO_PKG_VERSION"),
+    " (+",
+    env!("CARGO_PKG_REPOSITORY"),
+    ")"
+);
 
 /// Metadata (API) calls: per-attempt limit, attempts, and first retry delay.
 const API_TIMEOUT: Duration = Duration::from_secs(60);
 const API_ATTEMPTS: u32 = 3;
-const API_BACKOFF: Duration = if cfg!(test) { Duration::from_millis(1) } else { Duration::from_millis(500) };
+const API_BACKOFF: Duration = if cfg!(test) {
+    Duration::from_millis(1)
+} else {
+    Duration::from_millis(500)
+};
 
 fn is_link_local(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(a) => a.is_link_local(),
-        IpAddr::V6(a) => a.to_ipv4_mapped().is_some_and(|m| m.is_link_local()) || (a.segments()[0] & 0xffc0) == 0xfe80,
+        IpAddr::V6(a) => {
+            a.to_ipv4_mapped().is_some_and(|m| m.is_link_local())
+                || (a.segments()[0] & 0xffc0) == 0xfe80
+        }
     }
 }
 
@@ -68,7 +81,10 @@ impl Http {
                 }
             }))
             .build()?;
-        Ok(Self { client, curseforge_key: curseforge_key.filter(|k| !k.trim().is_empty()) })
+        Ok(Self {
+            client,
+            curseforge_key: curseforge_key.filter(|k| !k.trim().is_empty()),
+        })
     }
 
     pub fn from_env() -> Result<Self> {
@@ -81,11 +97,17 @@ impl Http {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let Some(this) = req.try_clone() else { return req.timeout(API_TIMEOUT).send().await };
+            let Some(this) = req.try_clone() else {
+                return req.timeout(API_TIMEOUT).send().await;
+            };
             match this.timeout(API_TIMEOUT).send().await {
-                Ok(resp) if attempt >= API_ATTEMPTS || !transient_status(resp.status()) => return Ok(resp),
+                Ok(resp) if attempt >= API_ATTEMPTS || !transient_status(resp.status()) => {
+                    return Ok(resp);
+                }
                 Ok(resp) => tracing::debug!("{}: HTTP {}, retrying", resp.url(), resp.status()),
-                Err(e) if attempt >= API_ATTEMPTS || e.is_builder() || e.is_redirect() => return Err(e),
+                Err(e) if attempt >= API_ATTEMPTS || e.is_builder() || e.is_redirect() => {
+                    return Err(e);
+                }
                 Err(e) => tracing::debug!("request failed, retrying: {e}"),
             }
             tokio::time::sleep(API_BACKOFF * 2u32.pow(attempt - 1)).await;
@@ -93,17 +115,26 @@ impl Http {
     }
 
     pub async fn get_json<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
-        let resp = self.send(self.client.get(url)).await.with_context(|| format!("GET {url}"))?;
+        let resp = self
+            .send(self.client.get(url))
+            .await
+            .with_context(|| format!("GET {url}"))?;
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            bail!("GET {url}: HTTP {status}: {}", body.chars().take(300).collect::<String>());
+            bail!(
+                "GET {url}: HTTP {status}: {}",
+                body.chars().take(300).collect::<String>()
+            );
         }
         resp.json().await.with_context(|| format!("decoding {url}"))
     }
 
     pub async fn get_text(&self, url: &str) -> Result<String> {
-        let resp = self.send(self.client.get(url)).await.with_context(|| format!("GET {url}"))?;
+        let resp = self
+            .send(self.client.get(url))
+            .await
+            .with_context(|| format!("GET {url}"))?;
         if !resp.status().is_success() {
             bail!("GET {url}: HTTP {}", resp.status());
         }
@@ -153,7 +184,11 @@ mod tests {
 
         let (url, hits) = stub(vec![500]).await;
         assert!(http.get_json::<Vec<u8>>(&url).await.is_err());
-        assert_eq!(hits.load(Ordering::SeqCst), API_ATTEMPTS as usize, "gives up eventually");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            API_ATTEMPTS as usize,
+            "gives up eventually"
+        );
     }
 
     #[test]

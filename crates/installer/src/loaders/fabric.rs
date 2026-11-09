@@ -26,7 +26,10 @@ async fn install(ctx: &Ctx, mc: &str, loader: Option<&str>) -> Result<LaunchSpec
     let loader = match loader {
         Some(l) => l.to_string(),
         None => {
-            let list: Vec<FabricLoaderEntry> = ctx.http.get_json(&format!("{META}/versions/loader/{mc}")).await?;
+            let list: Vec<FabricLoaderEntry> = ctx
+                .http
+                .get_json(&format!("{META}/versions/loader/{mc}"))
+                .await?;
             list.iter()
                 .find(|e| e.loader.stable)
                 .or(list.first())
@@ -34,10 +37,24 @@ async fn install(ctx: &Ctx, mc: &str, loader: Option<&str>) -> Result<LaunchSpec
                 .with_context(|| format!("Fabric does not support Minecraft {mc}"))?
         }
     };
-    let installers: Vec<FabricVersion> = ctx.http.get_json(&format!("{META}/versions/installer")).await?;
-    let installer = installers.iter().find(|i| i.stable).or(installers.first()).context("no Fabric installer")?;
-    let url = format!("{META}/versions/loader/{mc}/{loader}/{}/server/jar", installer.version);
-    fetch(ctx, &Item::new(url, ctx.root.join("fabric-server-launch.jar"))).await?;
+    let installers: Vec<FabricVersion> = ctx
+        .http
+        .get_json(&format!("{META}/versions/installer"))
+        .await?;
+    let installer = installers
+        .iter()
+        .find(|i| i.stable)
+        .or(installers.first())
+        .context("no Fabric installer")?;
+    let url = format!(
+        "{META}/versions/loader/{mc}/{loader}/{}/server/jar",
+        installer.version
+    );
+    fetch(
+        ctx,
+        &Item::new(url, ctx.root.join("fabric-server-launch.jar")),
+    )
+    .await?;
     // The launcher downloads the vanilla jar itself, but fetching it here keeps first boot predictable.
     super::vanilla::server_jar(ctx, mc).await?;
     Ok(jar_launch("fabric-server-launch.jar"))
@@ -50,7 +67,12 @@ impl LoaderInstaller for Fabric {
         Loader::Fabric
     }
 
-    fn install<'a>(&'a self, ctx: &'a Ctx, mc: &'a str, version: Option<&'a str>) -> BoxFuture<'a, Result<LaunchSpec>> {
+    fn install<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        mc: &'a str,
+        version: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<LaunchSpec>> {
         Box::pin(install(ctx, mc, version))
     }
 }

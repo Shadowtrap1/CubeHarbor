@@ -67,7 +67,11 @@ pub fn resolve_alias(m: &Manifest, v: &str) -> String {
 pub async fn version_info(http: &Http, version: &str) -> Result<VersionInfo> {
     let m = manifest(http).await?;
     let id = resolve_alias(&m, version);
-    let entry = m.versions.iter().find(|e| e.id == id).with_context(|| format!("unknown Minecraft version {id}"))?;
+    let entry = m
+        .versions
+        .iter()
+        .find(|e| e.id == id)
+        .with_context(|| format!("unknown Minecraft version {id}"))?;
     http.get_json(&entry.url).await
 }
 
@@ -79,8 +83,14 @@ pub struct Profile {
 }
 
 pub async fn profile(http: &Http, name: &str) -> Result<Profile> {
-    anyhow::ensure!(valid_player_name(name), "`{name}` is not a valid Java Edition player name");
-    http.get_json(&format!("https://api.mojang.com/users/profiles/minecraft/{name}")).await
+    anyhow::ensure!(
+        valid_player_name(name),
+        "`{name}` is not a valid Java Edition player name"
+    );
+    http.get_json(&format!(
+        "https://api.mojang.com/users/profiles/minecraft/{name}"
+    ))
+    .await
 }
 
 /// Java Edition names: 1-16 letters, digits or `_`. (Bedrock players via Floodgate have a prefix
@@ -94,7 +104,14 @@ pub fn dashed_uuid(id: &str) -> String {
     if id.len() != 32 {
         return id.to_string();
     }
-    format!("{}-{}-{}-{}-{}", &id[0..8], &id[8..12], &id[12..16], &id[16..20], &id[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &id[0..8],
+        &id[8..12],
+        &id[12..16],
+        &id[16..20],
+        &id[20..32]
+    )
 }
 
 #[cfg(test)]
@@ -104,7 +121,15 @@ mod tests {
         for ok in ["Notch", "jeb_", "a", "Sixteen_chars_ab"] {
             assert!(super::valid_player_name(ok), "{ok}");
         }
-        for bad in ["", "seventeen_chars_x", "a/b", "../x", "a b", ".BedrockGuy", "ä"] {
+        for bad in [
+            "",
+            "seventeen_chars_x",
+            "a/b",
+            "../x",
+            "a b",
+            ".BedrockGuy",
+            "ä",
+        ] {
             assert!(!super::valid_player_name(bad), "{bad}");
         }
     }

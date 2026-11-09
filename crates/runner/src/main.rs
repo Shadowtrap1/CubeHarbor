@@ -4,8 +4,8 @@
 //! installer recorded, forwards stdin (for `kubectl attach`) and turns SIGTERM into a clean
 //! `stop` so worlds are saved before the pod goes away.
 
-use std::path::{Path, PathBuf};
 use std::os::unix::process::ExitStatusExt;
+use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
@@ -34,8 +34,18 @@ const AIKAR_FLAGS: &[&str] = &[
 ];
 
 /// Large heaps (>12G) get Aikar's adjusted region sizing.
-const AIKAR_LARGE: &[&str] = &["-XX:G1NewSizePercent=40", "-XX:G1MaxNewSizePercent=50", "-XX:G1HeapRegionSize=16M", "-XX:G1ReservePercent=15"];
-const AIKAR_SMALL: &[&str] = &["-XX:G1NewSizePercent=30", "-XX:G1MaxNewSizePercent=40", "-XX:G1HeapRegionSize=8M", "-XX:G1ReservePercent=20"];
+const AIKAR_LARGE: &[&str] = &[
+    "-XX:G1NewSizePercent=40",
+    "-XX:G1MaxNewSizePercent=50",
+    "-XX:G1HeapRegionSize=16M",
+    "-XX:G1ReservePercent=15",
+];
+const AIKAR_SMALL: &[&str] = &[
+    "-XX:G1NewSizePercent=30",
+    "-XX:G1MaxNewSizePercent=40",
+    "-XX:G1HeapRegionSize=8M",
+    "-XX:G1ReservePercent=20",
+];
 
 #[tokio::main]
 async fn main() {
@@ -45,8 +55,19 @@ async fn main() {
         let port = cubeharbor_core::crd::MINECRAFT_PORT;
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
         // A server set up for PROXY protocol drops connections without the header.
-        let prefix = if proxy_protocol() { cubeharbor_core::protocol::proxy_v2_header(addr, addr) } else { vec![] };
-        match cubeharbor_core::protocol::ping_with_prefix(&addr.to_string(), "localhost", port, &prefix).await {
+        let prefix = if proxy_protocol() {
+            cubeharbor_core::protocol::proxy_v2_header(addr, addr)
+        } else {
+            vec![]
+        };
+        match cubeharbor_core::protocol::ping_with_prefix(
+            &addr.to_string(),
+            "localhost",
+            port,
+            &prefix,
+        )
+        .await
+        {
             Ok(_) => std::process::exit(0),
             Err(e) => {
                 eprintln!("not ready: {e:#}");
@@ -79,7 +100,10 @@ fn env(key: &str) -> Option<String> {
 
 /// Container memory limit from cgroup v2 (or v1), in MiB.
 fn cgroup_limit_mib() -> Option<u64> {
-    for p in ["/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"] {
+    for p in [
+        "/sys/fs/cgroup/memory.max",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+    ] {
         if let Ok(s) = std::fs::read_to_string(p)
             && let Ok(bytes) = s.trim().parse::<u64>()
             && bytes < (1 << 50)
@@ -95,21 +119,30 @@ fn cgroup_limit_mib() -> Option<u64> {
 pub fn heap_mib(limit_mib: u64, percent: Option<u64>) -> u64 {
     let heap = match percent {
         Some(p) => limit_mib * p.clamp(10, 95) / 100,
-        None => limit_mib.saturating_sub((limit_mib * defaults::HEAP_RESERVE_PERCENT / 100).max(defaults::HEAP_RESERVE_MIN_MIB)),
+        None => limit_mib.saturating_sub(
+            (limit_mib * defaults::HEAP_RESERVE_PERCENT / 100).max(defaults::HEAP_RESERVE_MIN_MIB),
+        ),
     };
     heap.max(defaults::HEAP_MIN_MIB)
 }
 
 fn jvm_args(launch: &LaunchSpec) -> Vec<String> {
     let mut args = vec![];
-    let limit = env("MEMORY_LIMIT_MIB").and_then(|s| s.parse().ok()).or_else(cgroup_limit_mib).unwrap_or(defaults::FALLBACK_MEMORY_LIMIT_MIB);
+    let limit = env("MEMORY_LIMIT_MIB")
+        .and_then(|s| s.parse().ok())
+        .or_else(cgroup_limit_mib)
+        .unwrap_or(defaults::FALLBACK_MEMORY_LIMIT_MIB);
     let heap = heap_mib(limit, env("HEAP_PERCENT").and_then(|s| s.parse().ok()));
     tracing::info!("memory limit {limit} MiB -> heap {heap} MiB");
     args.push(format!("-Xms{heap}M"));
     args.push(format!("-Xmx{heap}M"));
     if env("AIKAR_FLAGS").is_none_or(|v| v != "false") {
         args.extend(AIKAR_FLAGS.iter().map(|s| s.to_string()));
-        let extra = if heap > defaults::AIKAR_LARGE_HEAP_MIB { AIKAR_LARGE } else { AIKAR_SMALL };
+        let extra = if heap > defaults::AIKAR_LARGE_HEAP_MIB {
+            AIKAR_LARGE
+        } else {
+            AIKAR_SMALL
+        };
         args.extend(extra.iter().map(|s| s.to_string()));
         args.push("-Dusing.aikars.flags=https://mcflags.emc.gs".into());
         args.push("-Daikars.new.flags=true".into());
@@ -136,7 +169,11 @@ async fn run() -> Result<i32> {
     // Before the spawn: a SIGTERM with no handler is simply dropped for PID 1.
     let mut term = signal(SignalKind::terminate())?;
     let mut int = signal(SignalKind::interrupt())?;
-    let grace = Duration::from_secs(env("STOP_TIMEOUT_SECONDS").and_then(|s| s.parse().ok()).unwrap_or(defaults::FALLBACK_STOP_TIMEOUT_SECONDS));
+    let grace = Duration::from_secs(
+        env("STOP_TIMEOUT_SECONDS")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(defaults::FALLBACK_STOP_TIMEOUT_SECONDS),
+    );
 
     let mut child = Command::new(&java)
         .args(&args)
@@ -154,7 +191,12 @@ async fn run() -> Result<i32> {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(16);
     tokio::spawn(async move {
         while let Some(line) = rx.recv().await {
-            if stdin.write_all(format!("{line}\n").as_bytes()).await.is_err() || stdin.flush().await.is_err() {
+            if stdin
+                .write_all(format!("{line}\n").as_bytes())
+                .await
+                .is_err()
+                || stdin.flush().await.is_err()
+            {
                 break;
             }
         }
@@ -183,7 +225,10 @@ async fn run() -> Result<i32> {
     // `stop` for most of the grace period, then SIGTERM (the JVM's shutdown hooks still save the
     // world if the console is stuck), then SIGKILL when the time is up.
     let (polite, last_resort) = (grace * 4 / 5, grace / 5);
-    tracing::info!("shutting down: sending `stop` (timeout {}s)", grace.as_secs());
+    tracing::info!(
+        "shutting down: sending `stop` (timeout {}s)",
+        grace.as_secs()
+    );
     let stop = async {
         let _ = tx.send("stop".into()).await;
         child.wait().await
@@ -206,12 +251,16 @@ async fn run() -> Result<i32> {
 
 /// The child's exit code, or the shell convention `128 + signal` when a signal killed it.
 fn exit_code(status: ExitStatus) -> i32 {
-    status.code().or_else(|| status.signal().map(|s| 128 + s)).unwrap_or(1)
+    status
+        .code()
+        .or_else(|| status.signal().map(|s| 128 + s))
+        .unwrap_or(1)
 }
 
 fn load_launch(root: &Path) -> Result<LaunchSpec> {
     let p = root.join(plan::LAUNCH_FILE);
-    let data = std::fs::read(&p).with_context(|| format!("{} missing — did the installer run?", p.display()))?;
+    let data = std::fs::read(&p)
+        .with_context(|| format!("{} missing — did the installer run?", p.display()))?;
     Ok(serde_json::from_slice(&data)?)
 }
 
