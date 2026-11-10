@@ -38,6 +38,10 @@ pub const GEYSER_PORT: u16 = 19132;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct MinecraftServerSpec {
+    /// Inherit settings from a `MinecraftServerTemplate` in the same namespace. Anything set here wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_ref: Option<crate::template::TemplateRef>,
+
     /// Minecraft version (e.g. `1.21.1`, `26.3`, `latest`). Optional when a modpack defines it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -255,33 +259,35 @@ pub struct ModRef {
     pub dir: Option<String>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+// `memory` and `storage` have no schema default on purpose: the API server would store the
+// default on every object, and a server that leaves them unset (and so inherits them from its
+// template) could no longer be told apart from one that asks for exactly the default. Read them
+// through `ServerResources::memory()` and `ServerResources::storage()`.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerResources {
-    /// Container memory limit. The JVM heap is derived from it.
-    #[serde(default = "default_memory")]
-    pub memory: String,
+    /// Container memory limit. The JVM heap is derived from it. Default `4Gi`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_limit: Option<String>,
-    /// Size of the world/data volume.
-    #[serde(default = "default_storage")]
-    pub storage: String,
+    /// Size of the world/data volume. Default `20Gi`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_class: Option<String>,
 }
 
-fn default_memory() -> String {
-    crate::defaults::MEMORY.into()
-}
-fn default_storage() -> String {
-    crate::defaults::STORAGE.into()
-}
-
-impl Default for ServerResources {
-    fn default() -> Self {
-        Self { memory: default_memory(), cpu: None, cpu_limit: None, storage: default_storage(), storage_class: None }
+impl ServerResources {
+    /// The memory limit, or the built-in default.
+    pub fn memory(&self) -> &str {
+        self.memory.as_deref().unwrap_or(crate::defaults::MEMORY)
+    }
+    /// The volume size, or the built-in default.
+    pub fn storage(&self) -> &str {
+        self.storage.as_deref().unwrap_or(crate::defaults::STORAGE)
     }
 }
 
@@ -473,6 +479,9 @@ pub struct MinecraftServerStatus {
     /// Stopped by auto-sleep; the gateway clears this when a player joins.
     #[serde(default)]
     pub sleeping: bool,
+    /// The template revision last applied, for servers with a `templateRef`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<crate::template::AppliedTemplate>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, JsonSchema, PartialEq, Eq)]

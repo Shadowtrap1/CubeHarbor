@@ -8,9 +8,10 @@ test:
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 
-# Regenerate the CRD shipped in the chart from the Rust types.
+# Regenerate the CRDs shipped in the chart from the Rust types.
 crd:
 	cargo run -q -p cubeharbor -- crd > charts/cubeharbor/crds/minecraftservers.yaml
+	cargo run -q -p cubeharbor -- crd-template > charts/cubeharbor/crds/minecraftservertemplates.yaml
 
 images:
 	REGISTRY=$(REGISTRY) TAG=$(TAG) docker buildx bake --load

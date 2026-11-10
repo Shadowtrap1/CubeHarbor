@@ -63,7 +63,7 @@ The project README has a [table of settings per cluster type](https://github.com
 | dashboard | Deployment + ClusterIP Service | Web UI and API. Expose it with `dashboard.ingress`, `dashboard.httpRoute` or `cloudflareTunnel`, always over TLS. |
 | mc-router | Deployment | Only with `router.mode: mc-router`, instead of the gateway's hostname routing. |
 | cloudflared | Deployment | Only with `cloudflareTunnel.enabled`. |
-| `minecraftservers.cubeharbor.dev` | CRD | In `crds/`, see upgrading below. |
+| `minecraftservers.cubeharbor.dev`, `minecraftservertemplates.cubeharbor.dev` | CRDs | In `crds/`, see upgrading below. |
 
 Every pod runs as non-root with a read-only root filesystem, no capabilities and the
 `RuntimeDefault` seccomp profile (Pod Security "restricted"), and has resource requests and
@@ -107,7 +107,7 @@ values are deleted with the release (their volumes are kept). To remove everythi
 ```sh
 kubectl delete mcs --all -A                      # servers (volumes are still kept)
 kubectl delete pvc -n <namespace> data-<name>-0  # each world you no longer want
-kubectl delete crd minecraftservers.cubeharbor.dev
+kubectl delete crd minecraftservers.cubeharbor.dev minecraftservertemplates.cubeharbor.dev
 ```
 
 ## Values

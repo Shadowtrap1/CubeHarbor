@@ -408,7 +408,7 @@ pub fn compose_preview(st: &AppState, me: &Identity, input: &str, rehost: bool, 
                                 (s.spec.loader.map(|l| l.as_str()).unwrap_or("vanilla")) " " (s.spec.version.clone().unwrap_or_else(|| "latest".into()))
                             }
                         }
-                        td { (s.spec.resources.memory) }
+                        td { (s.spec.resources.memory()) }
                         td.mono { (cubeharbor_core::crd::effective_hostnames(&s.name, &s.spec, Some(&suffix)).join(", ")) }
                         td.muted {
                             @if s.spec.voice.is_some() { "voice " }
@@ -478,7 +478,7 @@ pub fn server_detail(st: &AppState, me: &Identity, s: &MinecraftServer, spec_yam
                         div { "Java" } div { (r.java_version) }
                         @if let Some(m) = &r.modpack { div { "Modpack" } div { (m.name) " " span.muted { (m.version) } } }
                     }
-                    div { "Memory" } div { (s.spec.resources.memory) }
+                    div { "Memory" } div { (s.spec.resources.memory()) }
                     div { "Players" } div {
                         @if let Some(p) = &status.players { (p.online) "/" (p.max) @if !p.sample.is_empty() { " — " (p.sample.join(", ")) } } @else { "–" }
                     }

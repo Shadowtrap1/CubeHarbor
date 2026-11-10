@@ -116,6 +116,11 @@ pub struct Config {
     #[arg(long, env = "DASHBOARD_SELECTOR", default_value = "app.kubernetes.io/component=dashboard")]
     pub dashboard_selector: String,
 
+    /// How many running servers of one MinecraftServerTemplate may restart at once for a
+    /// template change; the rest wait until those are ready again (minimum 1).
+    #[arg(long, env = "TEMPLATE_ROLLOUT_MAX_UNAVAILABLE", default_value_t = 1)]
+    pub template_rollout_max_unavailable: usize,
+
     /// CPU request for servers that don't set `resources.cpu` ("0" = no request).
     #[arg(long, env = "DEFAULT_CPU_REQUEST", default_value = defaults::CPU_REQUEST)]
     pub default_cpu_request: String,

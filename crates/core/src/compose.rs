@@ -837,7 +837,7 @@ servers:
         assert_eq!(out.project.as_deref(), Some("my-network"));
         assert_eq!(out.servers.len(), 3);
         let atm = out.servers.iter().find(|s| s.name == "atm-10").unwrap();
-        assert_eq!(atm.spec.resources.memory, "16Gi");
+        assert_eq!(atm.spec.resources.memory(), "16Gi");
         assert_eq!(atm.spec.accept_eula, Some(true));
         assert_eq!(atm.spec.voice.as_ref().unwrap().kind, VoiceKind::SimpleVoiceChat);
         assert_eq!(atm.spec.modpack.as_ref().unwrap().curseforge.as_ref().unwrap().file_id, Some(123456));
@@ -846,7 +846,7 @@ servers:
         assert_eq!(atm.spec.extra_ports[0].host.as_deref(), Some("map.example.com"));
         let lobby = out.servers.iter().find(|s| s.name == "lobby").unwrap();
         assert_eq!(lobby.spec.loader, Some(Loader::Paper));
-        assert_eq!(lobby.spec.resources.memory, "6Gi");
+        assert_eq!(lobby.spec.resources.memory(), "6Gi");
         assert_eq!(lobby.spec.mods.len(), 2);
         let cobble = out.servers.iter().find(|s| s.name == "cobble").unwrap();
         assert_eq!(cobble.spec.modpack.as_ref().unwrap().modrinth.as_ref().unwrap().project, "cobblemon-fabric");
@@ -884,7 +884,7 @@ services:
         assert_eq!(out.servers.len(), 1);
         let s = &out.servers[0].spec;
         assert_eq!(s.modpack.as_ref().unwrap().curseforge.as_ref().unwrap().project, "all-the-mods-9");
-        assert_eq!(s.resources.memory, "10240Mi");
+        assert_eq!(s.resources.memory(), "10240Mi");
         assert_eq!(s.voice.as_ref().unwrap().public_port, Some(24454));
         assert_eq!(s.extra_ports[0].container_port, 8100);
         assert_eq!(s.properties["difficulty"], "hard");
@@ -910,7 +910,7 @@ services:
         assert_eq!(names, ["example-paper", "example-fabric"]);
         let paper = &out.servers[0].spec;
         assert_eq!(paper.loader, Some(crate::crd::Loader::Paper));
-        assert_eq!(paper.resources.memory, "5632Mi");
+        assert_eq!(paper.resources.memory(), "5632Mi");
         assert_eq!(paper.env["TZ"], "America/Chicago");
         assert!(paper.extra_ports.is_empty(), "the Java port is routed, not forwarded");
         assert!(out.warnings.iter().any(|w| w.contains("terraria") && w.contains("skipped")));

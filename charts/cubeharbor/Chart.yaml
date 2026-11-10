@@ -31,6 +31,11 @@ annotations:
       name: minecraftservers.cubeharbor.dev
       displayName: Minecraft server
       description: A Minecraft server (vanilla, Paper, Fabric, Forge, NeoForge, modpacks...) that the operator installs, routes and puts to sleep when idle.
+    - kind: MinecraftServerTemplate
+      version: v1alpha1
+      name: minecraftservertemplates.cubeharbor.dev
+      displayName: Minecraft server template
+      description: Shared settings that MinecraftServers reference with spec.templateRef and can override.
   artifacthub.io/crdsExamples: |
     - apiVersion: cubeharbor.dev/v1alpha1
       kind: MinecraftServer

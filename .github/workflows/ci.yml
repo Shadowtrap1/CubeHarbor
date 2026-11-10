@@ -22,6 +22,8 @@ jobs:
         run: |
           cargo run -q -p cubeharbor -- crd > /tmp/crd.yaml
           diff -u charts/cubeharbor/crds/minecraftservers.yaml /tmp/crd.yaml
+          cargo run -q -p cubeharbor -- crd-template > /tmp/crd-template.yaml
+          diff -u charts/cubeharbor/crds/minecraftservertemplates.yaml /tmp/crd-template.yaml
 
   # helm lint --strict and kubeconform over the default values, examples/values-*.yaml and
   # charts/cubeharbor/ci/*-values.yaml, plus a check that docker-bake.hcl builds every image the

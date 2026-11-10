@@ -30,6 +30,7 @@ pub struct Ctx {
     pub alloc_lock: Mutex<()>,
     pub gateway_sync: Notify,
     pub stats: Arc<crate::metrics::Stats>,
+    pub rollouts: crate::templates::Rollouts,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -112,7 +113,7 @@ async fn patch_status(api: &Api<MinecraftServer>, name: &str, status: &Minecraft
 
 /// Status fields that serialization leaves out when empty.
 const CLEARABLE_STATUS_FIELDS: &[&str] =
-    &["message", "observedGeneration", "resolved", "resolvedHash", "hostnames", "service", "allocations", "players", "lastActive"];
+    &["message", "observedGeneration", "resolved", "resolvedHash", "hostnames", "service", "allocations", "players", "lastActive", "template"];
 
 /// The status as a merge patch. A key left out of a merge patch keeps its old value, so empty
 /// fields are sent as explicit nulls; otherwise e.g. a fixed error's message would never clear.
@@ -166,6 +167,17 @@ fn stale<K: Resource>(obj: &K, uid: &str, wanted: &[String]) -> bool {
 }
 
 async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str, status: &mut MinecraftServerStatus) -> Result<Action> {
+    // Everything below sees the merged spec. Stays first so the checks (image allow-list, ports) do too.
+    let max = ctx.cfg.template_rollout_max_unavailable;
+    let (mcs, granted) = match crate::templates::effective(&ctx.client, &ctx.rollouts, max, ns, mcs, status).await? {
+        crate::templates::Effective::Apply { mcs, granted } => (mcs, granted),
+        crate::templates::Effective::Wait(msg) => {
+            // The existing objects stay as they are; the server keeps running on its old spec.
+            status.message = Some(msg);
+            return Ok(Action::requeue(Duration::from_secs(30)));
+        }
+    };
+    let mcs = &*mcs;
     let client = &ctx.client;
     let cfg = &ctx.cfg;
     let pp = PatchParams::apply(labels::FIELD_MANAGER).force();
@@ -324,6 +336,7 @@ async fn reconcile_inner(mcs: &MinecraftServer, ctx: &Ctx, ns: &str, name: &str,
         status.sleeping = false;
     }
     let running = !spec.paused && !status.sleeping;
+    crate::templates::finish_rollout(status, granted, running, phase, existing_sts.as_ref());
 
     // 9. StatefulSet (volume claim templates are immutable, so keep whatever exists).
     let existing_claims = existing_sts
@@ -633,6 +646,7 @@ mod tests {
             allocations: vec![PortAllocation { name: "voice".into(), protocol: Protocol::Udp, container_port: 1, public_port: 2 }],
             players: Some(Players::default()),
             last_active: Some("t".into()),
+            template: Some(cubeharbor_core::template::AppliedTemplate { name: "t".into(), generation: Some(1), ..Default::default() }),
             ..Default::default()
         };
         let full = serde_json::to_value(&full).unwrap();

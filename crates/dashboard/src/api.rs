@@ -97,7 +97,7 @@ pub fn summarize(st: &AppState, s: &MinecraftServer) -> Summary {
         loader: status.resolved.as_ref().map(|r| r.loader.as_str().into()).or(s.spec.loader.map(|l| l.as_str().into())),
         modpack: status.resolved.as_ref().and_then(|r| r.modpack.as_ref()).map(|m| format!("{} {}", m.name, m.version)),
         players: status.players.as_ref().map(|p| PlayerCount { online: p.online, max: p.max }),
-        memory: Some(s.spec.resources.memory.clone()),
+        memory: Some(s.spec.resources.memory().to_string()),
         project: s.labels().get(PROJECT_LABEL).cloned(),
         ports: status
             .allocations

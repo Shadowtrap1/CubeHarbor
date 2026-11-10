@@ -11,6 +11,7 @@ pub mod plan;
 pub mod protocol;
 pub mod rcon;
 pub mod sources;
+pub mod template;
 
 pub use crd::{Loader, MinecraftServer, MinecraftServerSpec, MinecraftServerStatus};
 pub use reqwest;
