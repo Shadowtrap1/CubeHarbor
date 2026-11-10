@@ -127,8 +127,8 @@ The dashboard has named users, each with their own password and one role:
 Admins add and remove users, change roles and reset passwords on the **Users** page; there is
 always at least one admin. Everyone changes their own password and creates API tokens on the
 **Account** page. Roles are checked by the server on every page and `/api` request, not just by
-hiding buttons. Adding a user, resetting a password and creating a token ask for your own
-password again, so a stolen session can't be turned into a lasting login.
+hiding buttons. Adding a user, changing a role, resetting a password and creating a token ask
+for your own password again (scripts send it as the `current` form field), so a stolen session can't be turned into a lasting login.
 
 Users are stored in the `<release>-dashboard-users` Secret (`users.json`: argon2id password
 hashes, SHA-256 hashes of API tokens), the only Secret the dashboard can write. The chart

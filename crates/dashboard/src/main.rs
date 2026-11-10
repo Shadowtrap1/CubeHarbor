@@ -1,9 +1,15 @@
 //! cubeharbor-dashboard: web UI and API for creating and operating servers.
 
+mod account;
 mod api;
 #[cfg(test)]
 mod e2e_tests;
+mod error;
+#[cfg(test)]
+mod failure_tests;
 mod handlers;
+mod ops;
+mod routes;
 mod site;
 mod users;
 mod views;
@@ -11,16 +17,15 @@ mod views;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use axum::Router;
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::{ConnectInfo, MatchedPath, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
-use axum::middleware::{self, Next};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
 use axum_extra::extract::CookieJar;
 use clap::Parser;
 use cubeharbor_core::cidr;
@@ -91,8 +96,23 @@ pub struct Config {
     /// slows a distributed guesser but also lets one block new logins for everyone.
     #[arg(long, env = "LOGIN_MAX_FAILURES_TOTAL", default_value_t = 100)]
     pub login_max_failures_total: u32,
+    /// Address of `/healthz`, `/readyz` and `/metrics`. Kept off the dashboard's own port, which
+    /// may be public, so metrics never need a login exemption there.
+    #[arg(long, env = "HEALTH_ADDR", default_value = "0.0.0.0:8081")]
+    pub health: String,
+    /// On SIGTERM, keep serving for this long while `/readyz` reports not ready, so the pod
+    /// leaves the Service endpoints before it stops accepting.
+    #[arg(long, env = "SHUTDOWN_DELAY_SECS", default_value_t = 5)]
+    pub shutdown_delay_secs: u64,
+    /// Then wait up to this long for open requests. Keep SHUTDOWN_DELAY_SECS + DRAIN_TIMEOUT_SECS
+    /// below the pod's terminationGracePeriodSeconds (30).
+    #[arg(long, env = "DRAIN_TIMEOUT_SECS", default_value_t = 20)]
+    pub drain_timeout_secs: u64,
 }
 
+/// Shared by every request. All of this is per process, which is why the chart runs one replica:
+/// `users` holds the sessions (see `users.rs`); with more replicas `failures` and `log_streams`
+/// would become per-replica limits and `stats` per-replica counters, which is harmless.
 pub struct AppState {
     pub client: Client,
     pub http: Http,
@@ -103,6 +123,14 @@ pub struct AppState {
     pub users: Users,
     failures: Mutex<Failures>,
     trusted_proxies: Vec<cidr::Cidr>,
+    pub stats: ops::Stats,
+    /// Set on SIGTERM: `/readyz` fails.
+    pub draining: AtomicBool,
+    /// Becomes true when the server stops accepting; ends the log streams, which never finish
+    /// on their own and would otherwise hold up the shutdown.
+    pub stop: tokio::sync::watch::Sender<bool>,
+    /// One permit per open log stream.
+    pub log_streams: Arc<tokio::sync::Semaphore>,
 }
 
 /// Failed password checks in the current window, per client and in total.
@@ -140,6 +168,18 @@ impl Failures {
         *n += 1;
         *n
     }
+
+    /// Take back a `record` whose password check succeeded.
+    fn refund(&mut self, client: IpAddr) {
+        self.total = self.total.saturating_sub(1);
+        let key = bucket(client);
+        if let Some(n) = self.per_client.get_mut(&key) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                self.per_client.remove(&key);
+            }
+        }
+    }
 }
 
 /// IPv6 clients usually get a whole /64, so they're limited per /64 rather than per address.
@@ -160,6 +200,8 @@ const FAILURE_WINDOW: Duration = Duration::from_secs(60);
 const MAX_FAILURES_PER_CLIENT: u32 = 10;
 /// Distinct clients tracked per window; new ones beyond this are throttled.
 const MAX_TRACKED_CLIENTS: usize = 100_000;
+/// Log streams open at once, across all users. Each holds a request to the Kubernetes API.
+pub const MAX_LOG_STREAMS: usize = 64;
 
 pub type St = State<Arc<AppState>>;
 
@@ -175,23 +217,42 @@ impl AppState {
     pub fn throttled(&self, client: IpAddr) -> bool {
         let mut f = self.failures.lock().unwrap();
         f.roll();
-        f.limited(client)
+        let limited = f.limited(client);
+        drop(f);
+        if limited {
+            ops::bump(&self.stats.throttled);
+        }
+        limited
     }
 
     /// Check a user's password (argon2id), counting failures like a wrong login.
     pub async fn check_login(&self, user: &str, pw: &str, client: IpAddr) -> Option<Role> {
+        // Counted before the hash and taken back on success: otherwise a burst of concurrent
+        // guesses all pass `throttled` while the first ones are still hashing.
+        let n = {
+            let mut f = self.failures.lock().unwrap();
+            f.roll();
+            f.record(client)
+        };
         let role = self.users.verify(user, pw).await;
-        if role.is_none() {
-            self.record_failure(client, "password");
+        if role.is_some() {
+            let mut f = self.failures.lock().unwrap();
+            f.roll();
+            f.refund(client);
+        } else {
+            ops::bump(&self.stats.password_failures);
+            tracing::warn!("failed password attempt from {client} ({n} in the last minute)");
         }
         role
     }
 
-    fn record_failure(&self, client: IpAddr, what: &str) {
+    fn record_token_failure(&self, client: IpAddr) {
         let mut f = self.failures.lock().unwrap();
         f.roll();
         let n = f.record(client);
-        tracing::warn!("failed {what} attempt from {client} ({n} in the last minute)");
+        drop(f);
+        ops::bump(&self.stats.token_failures);
+        tracing::warn!("failed API token attempt from {client} ({n} in the last minute)");
     }
 
     /// The client's address: the TCP peer, or for a trusted proxy the last `X-Forwarded-For`
@@ -254,6 +315,25 @@ fn path_namespace(path: &str) -> Option<&str> {
     rest.split('/').next().filter(|s| !s.is_empty())
 }
 
+/// The server name segment of `/servers/{ns}/{name}...` and `/api/v1/servers/{ns}/{name}...`.
+fn path_server(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/servers/").or_else(|| path.strip_prefix("/api/v1/servers/"))?;
+    rest.split('/').nth(1).filter(|s| !s.is_empty())
+}
+
+/// An RFC 1123 label: what a namespace can be called.
+pub fn valid_label(s: &str) -> bool {
+    let alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    (1..=63).contains(&s.len()) && s.starts_with(alnum) && s.ends_with(alnum) && s.chars().all(|c| alnum(c) || c == '-')
+}
+
+/// An RFC 1123 subdomain: what a Kubernetes object can be called. Names are pasted into API
+/// URLs (kube-rs doesn't escape them) and RCON addresses, so `/`, `?` and `..` must never get
+/// through, in any encoding: this checks the raw path, where those would still be `%2F` etc.
+pub fn valid_name(s: &str) -> bool {
+    s.len() <= 253 && s.split('.').all(valid_label)
+}
+
 /// A state-changing browser request from another site? (SameSite=Strict already keeps the
 /// cookie off those; this is defence in depth for older browsers.)
 fn cross_site(req: &Request) -> bool {
@@ -273,24 +353,36 @@ async fn security_headers(req: Request, next: Next) -> Response {
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("same-origin"));
+    // Pages can show a new API token or a server's config: keep them out of disk caches.
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("frame-ancestors 'none'; base-uri 'self'; form-action 'self'"));
     resp
 }
 
-/// Who is asking: a session cookie, or an API token as `Authorization: Bearer chb_...`.
-/// Then the request must be allowed for their role (`users::required_role`). The identity is
-/// passed on to handlers as a request extension.
+/// The one authorization check: every route's access comes from `routes::table`. Who is asking
+/// is a session cookie, or an API token as `Authorization: Bearer chb_...`; the identity is passed
+/// on to handlers as a request extension.
 async fn auth(State(st): St, jar: CookieJar, mut req: Request, next: Next) -> Response {
     let path = req.uri().path();
-    let public_list = st.cfg.public_server_list && path == "/api/v1/servers" && req.method() == axum::http::Method::GET;
-    if path == "/login" || path == "/healthz" || public_list || req.method() == axum::http::Method::OPTIONS {
-        return next.run(req).await;
+    if path == "/login" && *req.method() == Method::POST && cross_site(&req) {
+        // Login CSRF: another site could otherwise log the victim in to the attacker's account.
+        ops::bump(&st.stats.csrf_refused);
+        return (StatusCode::FORBIDDEN, "cross-site request refused").into_response();
     }
+    // No entry means no handler for this method and path: the router answers 404 or 405.
+    let access = req
+        .extensions()
+        .get::<MatchedPath>()
+        .zip(req.extensions().get::<routes::SharedPolicy>())
+        .and_then(|(pattern, policy)| policy.lookup(req.method(), pattern.as_str()));
+    let Some(access) = access else { return next.run(req).await };
+    let Some(needed) = access.required_role(path, st.cfg.public_server_list) else { return next.run(req).await };
     let from_cookie = jar.get(COOKIE).and_then(|c| st.users.session(c.value()));
     let bearer = req.headers().get(header::AUTHORIZATION).and_then(|h| h.to_str().ok()).and_then(|h| h.strip_prefix("Bearer "));
     let me = match (from_cookie, bearer) {
         (Some(me), _) => {
             if !matches!(*req.method(), Method::GET | Method::HEAD) && cross_site(&req) {
+                ops::bump(&st.stats.csrf_refused);
                 return (StatusCode::FORBIDDEN, "cross-site request refused").into_response();
             }
             me
@@ -304,7 +396,7 @@ async fn auth(State(st): St, jar: CookieJar, mut req: Request, next: Next) -> Re
             match st.users.check_token(token.trim()) {
                 Some((name, role)) => Identity { name, role, session: None },
                 None => {
-                    st.record_failure(client, "API token");
+                    st.record_token_failure(client);
                     return (StatusCode::UNAUTHORIZED, bearer_hint(token)).into_response();
                 }
             }
@@ -312,14 +404,18 @@ async fn auth(State(st): St, jar: CookieJar, mut req: Request, next: Next) -> Re
         (None, None) if path.starts_with("/api/") => return (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
         (None, None) => return Redirect::to("/login").into_response(),
     };
-    let needed = users::required_role(req.method(), path);
     if !me.can(needed) {
+        ops::bump(&st.stats.forbidden);
         return (StatusCode::FORBIDDEN, format!("{} needs the {} role (you are {})", path, needed.as_str(), me.role.as_str())).into_response();
     }
-    if let Some(ns) = path_namespace(path)
-        && !st.ns_allowed(ns)
-    {
-        return (StatusCode::FORBIDDEN, format!("namespace {ns} is not managed by this dashboard")).into_response();
+    if let Some(ns) = path_namespace(path) {
+        if !st.ns_allowed(ns) {
+            ops::bump(&st.stats.forbidden);
+            return (StatusCode::FORBIDDEN, format!("namespace {ns} is not managed by this dashboard")).into_response();
+        }
+        if !valid_label(ns) || path_server(path).is_some_and(|n| !valid_name(n)) {
+            return (StatusCode::BAD_REQUEST, "invalid namespace or server name").into_response();
+        }
     }
     req.extensions_mut().insert(me);
     next.run(req).await
@@ -338,6 +434,10 @@ fn bearer_hint(presented: &str) -> &'static str {
 
 fn new_state(cfg: &Config, client: Client, users: Users) -> Result<AppState> {
     Ok(AppState {
+        stats: ops::Stats::default(),
+        draining: AtomicBool::new(false),
+        stop: tokio::sync::watch::channel(false).0,
+        log_streams: Arc::new(tokio::sync::Semaphore::new(MAX_LOG_STREAMS)),
         client,
         http: Http::new(cfg.curseforge_api_key.clone())?,
         users,
@@ -348,45 +448,6 @@ fn new_state(cfg: &Config, client: Client, users: Users) -> Result<AppState> {
         cors_origins: cfg.cors_origins.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(),
         cfg: cfg.clone(),
     })
-}
-
-fn router(state: Arc<AppState>) -> Router {
-    use handlers::*;
-    Router::new()
-        .route("/", get(index))
-        .route("/fragments/servers", get(servers_fragment))
-        .route("/login", get(login_page).post(login))
-        .route("/logout", post(logout))
-        .route("/account", get(account_page))
-        .route("/account/password", post(change_password))
-        .route("/account/tokens", post(create_token))
-        .route("/account/tokens/{id}/revoke", post(revoke_token))
-        .route("/users", get(users_page).post(add_user))
-        .route("/users/{name}/role", post(set_role))
-        .route("/users/{name}/password", post(reset_password))
-        .route("/users/{name}/delete", post(remove_user))
-        .route("/new", get(new_page))
-        .route("/new/quick", post(quick_create))
-        .route("/compose/preview", post(compose_preview))
-        .route("/compose/apply", post(compose_apply))
-        .route("/servers/{ns}/{name}", get(server_page))
-        .route("/servers/{ns}/{name}/action/{action}", post(server_action))
-        .route("/servers/{ns}/{name}/spec", post(update_spec))
-        .route("/servers/{ns}/{name}/console", post(console))
-        .route("/servers/{ns}/{name}/logs", get(logs))
-        .route("/servers/{ns}/{name}/compose.yaml", get(api::server_compose))
-        .route("/compose/export", get(api::compose_export))
-        .route("/api/servers", get(api_servers))
-        .route("/api/compose", post(api_compose))
-        .route("/api/modpacks/search", get(api_search))
-        .route("/api/v1/servers", get(api::servers))
-        .route("/api/v1/servers/{ns}/{name}/compose", get(api::server_compose))
-        .route("/api/v1/compose", get(api::compose_export).post(api::compose_apply))
-        .route("/healthz", get(|| async { "ok" }))
-        .layer(middleware::from_fn_with_state(state.clone(), auth))
-        .layer(middleware::from_fn_with_state(state.clone(), api::cors))
-        .layer(middleware::from_fn(security_headers))
-        .with_state(state)
 }
 
 #[tokio::main]
@@ -400,17 +461,40 @@ async fn main() -> Result<()> {
         Backend { secrets: kube::Api::namespaced(client.clone(), &ns), name: cfg.users_secret.clone() }
     });
     let users = Users::load(backend, Some(&cfg.password)).await?;
-    let app = router(Arc::new(new_state(&cfg, client, users)?));
+    let state = Arc::new(new_state(&cfg, client, users)?);
+    let app = routes::router(state.clone());
+
+    // Up only after the users loaded: until then there is nothing that could answer a login.
+    let probe = state.clone();
+    cubeharbor_core::health::spawn(cfg.health.clone(), move |path| ops::endpoint(&probe, path));
 
     let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;
     tracing::info!("dashboard listening on {}", cfg.listen);
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(async {
-            if let Ok(mut term) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                term.recv().await;
-            }
-        })
-        .await?;
+
+    // Graceful shutdown: report not ready and keep serving while the pod is removed from the
+    // Service endpoints, then stop accepting, end the log streams and let requests finish.
+    let delay = Duration::from_secs(cfg.shutdown_delay_secs);
+    let drain = Duration::from_secs(cfg.drain_timeout_secs);
+    let on_signal = state.clone();
+    tokio::spawn(async move {
+        cubeharbor_core::health::shutdown_signal().await;
+        tracing::info!("shutting down: not ready, still serving for {}s", delay.as_secs());
+        on_signal.draining.store(true, Ordering::Relaxed);
+        tokio::time::sleep(delay).await;
+        let _ = on_signal.stop.send(true);
+    });
+    let mut stopped = state.stop.subscribe();
+    let mut deadline = state.stop.subscribe();
+    let server = std::future::IntoFuture::into_future(axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(async move {
+        let _ = stopped.wait_for(|s| *s).await;
+    }));
+    tokio::select! {
+        r = server => r?,
+        _ = async move {
+            let _ = deadline.wait_for(|s| *s).await;
+            tokio::time::sleep(drain).await;
+        } => tracing::info!("drain timeout reached, closing the remaining requests"),
+    }
     Ok(())
 }
 
@@ -424,6 +508,35 @@ mod tests {
         assert_eq!(path_namespace("/api/v1/servers/ns/x/compose"), Some("ns"));
         assert_eq!(path_namespace("/api/v1/servers"), None);
         assert_eq!(path_namespace("/"), None);
+        assert_eq!(path_server("/servers/ns/x/console"), Some("x"));
+        assert_eq!(path_server("/api/v1/servers/ns/x/compose"), Some("x"));
+        assert_eq!(path_server("/api/v1/servers"), None);
+    }
+
+    #[test]
+    fn kubernetes_names() {
+        for ok in ["a", "survival-2", "my.server", "0a"] {
+            assert!(valid_name(ok), "{ok}");
+        }
+        for bad in ["", "..", "a/b", "a%2Fb", "a..b", ".a", "a.", "-a", "a-", "A", "a?b=c", "a b", &"a".repeat(254)] {
+            assert!(!valid_name(bad), "{bad}");
+        }
+        assert!(valid_label("kube-system"));
+        assert!(!valid_label("a.b"), "namespaces have no dots");
+        assert!(!valid_label(&"a".repeat(64)));
+    }
+
+    #[test]
+    fn refund_undoes_a_record() {
+        let ip = "192.0.2.9".parse::<IpAddr>().unwrap();
+        let mut f = Failures::new(100);
+        f.record(ip);
+        f.refund(ip);
+        assert_eq!(f.total, 0);
+        assert!(f.per_client.is_empty(), "no entry is left behind");
+        // A refund landing in a fresh window has nothing to undo.
+        f.refund(ip);
+        assert_eq!(f.total, 0);
     }
 
     #[test]

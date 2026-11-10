@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
@@ -71,7 +72,7 @@ async fn load(data: &SecretData, seed: &str) -> anyhow::Result<Users> {
 async fn app(data: &SecretData) -> Router {
     let cfg = Config::try_parse_from(["dashboard", "--default-namespace", NS, "--login-max-failures-total", "0"]).unwrap();
     let users = load(data, OLD_PASSWORD).await.unwrap();
-    router(Arc::new(new_state(&cfg, fake_kube(data.clone()), users).unwrap()))
+    routes::router(Arc::new(new_state(&cfg, fake_kube(data.clone()), users).unwrap()))
 }
 
 /// Send a request as a browser on the dashboard's own origin (or with a Bearer token).
@@ -221,13 +222,13 @@ async fn upgrade_roles_and_user_management() {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     // Role changes apply to existing sessions.
-    let (status, _, _) = send(&app, "POST", "/users/otto/role", Some(&admin), "role=viewer").await;
+    let (status, _, _) = send(&app, "POST", "/users/otto/role", Some(&admin), &format!("role=viewer&current={OLD_PASSWORD}")).await;
     assert_eq!(status, StatusCode::OK);
     let (status, body, _) = send(&app, "POST", "/servers/mc/a/action/stop", Some(&operator), "").await;
     assert!(refused_for_role(status, &body));
 
     // The last admin can't be removed or demoted.
-    let (status, body, _) = send(&app, "POST", "/users/admin/role", Some(&admin), "role=viewer").await;
+    let (status, body, _) = send(&app, "POST", "/users/admin/role", Some(&admin), &format!("role=viewer&current={OLD_PASSWORD}")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let (status, _, _) = send(&app, "POST", "/users/admin/delete", Some(&admin), "").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

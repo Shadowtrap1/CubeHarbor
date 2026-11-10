@@ -10,7 +10,7 @@
 use std::time::{Duration, Instant};
 
 use axum::Json;
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{Extension, Path, Query, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -21,7 +21,10 @@ use kube::api::{Api, ListParams};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{AppState, St};
+use crate::error::api_failure;
+use crate::handlers::mask_env;
+use crate::users::Identity;
+use crate::{AppState, St, valid_label};
 
 /// One server, wherever it runs.
 #[derive(Serialize, Clone, Debug, Default)]
@@ -161,8 +164,9 @@ pub async fn remote_servers(st: &AppState) -> (Vec<Summary>, Vec<SourceStatus>) 
                 sources.push(SourceStatus { name, ok: true, error: None });
             }
             Err(e) => {
+                // The cause can name internal addresses, and this list can be public.
                 tracing::warn!("remote {name}: {e}");
-                sources.push(SourceStatus { name, ok: false, error: Some(e) });
+                sources.push(SourceStatus { name, ok: false, error: Some("unreachable".into()) });
             }
         }
     }
@@ -236,7 +240,7 @@ pub async fn servers(State(st): St, Query(q): Query<ServersQuery>) -> Response {
     let api: Api<MinecraftServer> = Api::all(st.client.clone());
     let mut list = match api.list(&ListParams::default()).await {
         Ok(l) => l.items,
-        Err(e) => return api_error(StatusCode::BAD_GATEWAY, format!("listing servers: {e}")),
+        Err(e) => return api_failure(e.into()),
     };
     list.retain(|s| st.ns_allowed(&s.namespace().unwrap_or_default()));
     list.sort_by_key(|s| (s.namespace(), s.name_any()));
@@ -282,7 +286,7 @@ pub async fn compose_apply(State(st): St, Query(q): Query<ComposeQuery>, body: S
     }
     match crate::handlers::apply(&State(st.clone()), &out).await {
         Ok(applied) => Json(json!({ "applied": applied, "warnings": out.warnings })).into_response(),
-        Err(e) => api_error(StatusCode::BAD_GATEWAY, format!("{e:#}")),
+        Err(e) => api_failure(e),
     }
 }
 
@@ -306,11 +310,17 @@ pub struct ExportQuery {
 }
 
 /// `GET /api/v1/compose` (and `/compose/export`): every server as one compose file.
-pub async fn compose_export(State(st): St, Query(q): Query<ExportQuery>) -> Response {
-    if let Some(ns) = &q.namespace
-        && let Err(e) = st.check_ns(ns)
-    {
-        return api_error(StatusCode::FORBIDDEN, e);
+pub async fn compose_export(State(st): St, Extension(me): Extension<Identity>, Query(q): Query<ExportQuery>) -> Response {
+    if let Some(ns) = &q.namespace {
+        if let Err(e) = st.check_ns(ns) {
+            return api_error(StatusCode::FORBIDDEN, e);
+        }
+        if !valid_label(ns) {
+            return api_error(StatusCode::BAD_REQUEST, "invalid namespace");
+        }
+    }
+    if q.project.as_deref().is_some_and(|p| !valid_project(p)) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid project name");
     }
     let api: Api<MinecraftServer> = match &q.namespace {
         Some(ns) => Api::namespaced(st.client.clone(), ns),
@@ -322,10 +332,11 @@ pub async fn compose_export(State(st): St, Query(q): Query<ExportQuery>) -> Resp
     }
     let mut list = match api.list(&lp).await {
         Ok(l) => l.items,
-        Err(e) => return api_error(StatusCode::BAD_GATEWAY, format!("listing servers: {e}")),
+        Err(e) => return api_failure(e.into()),
     };
     list.retain(|s| st.ns_allowed(&s.namespace().unwrap_or_default()));
     list.sort_by_key(|s| (s.namespace(), s.name_any()));
+    list.iter_mut().for_each(|s| mask_env(&me, s));
     let file: String = q.project.as_deref().unwrap_or("cubeharbor").chars().filter(|c| c.is_ascii_alphanumeric() || "-_.".contains(*c)).collect();
     match compose::export(&list, q.project.as_deref()) {
         Ok(y) => yaml(y, &format!("{file}.yaml")),
@@ -333,11 +344,17 @@ pub async fn compose_export(State(st): St, Query(q): Query<ExportQuery>) -> Resp
     }
 }
 
+/// A project is a label value, and it goes into a label selector: no `,`, `=` or spaces.
+fn valid_project(p: &str) -> bool {
+    p.len() <= 63 && p.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+}
+
 /// `GET /api/v1/servers/{ns}/{name}/compose`: one server as a compose file.
-pub async fn server_compose(State(st): St, Path((ns, name)): Path<(String, String)>) -> Response {
+pub async fn server_compose(State(st): St, Extension(me): Extension<Identity>, Path((ns, name)): Path<(String, String)>) -> Response {
     let api: Api<MinecraftServer> = Api::namespaced(st.client.clone(), &ns);
     match api.get_opt(&name).await {
-        Ok(Some(s)) => {
+        Ok(Some(mut s)) => {
+            mask_env(&me, &mut s);
             let project = s.labels().get(PROJECT_LABEL).cloned();
             match compose::export(std::slice::from_ref(&s), project.as_deref()) {
                 Ok(y) => yaml(y, &format!("{name}.yaml")),
@@ -345,7 +362,7 @@ pub async fn server_compose(State(st): St, Path((ns, name)): Path<(String, Strin
             }
         }
         Ok(None) => api_error(StatusCode::NOT_FOUND, format!("server {ns}/{name} not found")),
-        Err(e) => api_error(StatusCode::BAD_GATEWAY, e),
+        Err(e) => api_failure(e.into()),
     }
 }
 

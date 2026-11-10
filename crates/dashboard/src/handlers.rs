@@ -1,15 +1,11 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::net::SocketAddr;
 
 use axum::Json;
-use axum::extract::{ConnectInfo, Extension, Form, Path, Query};
+use axum::extract::{Extension, Form, Path, Query};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum_extra::extract::CookieJar;
-use axum::http::HeaderMap;
-use axum_extra::extract::cookie::Cookie;
 use cubeharbor_core::compose::{self, ComposeOutput};
 use cubeharbor_core::crd::{MinecraftServer, MinecraftServerSpec, RCON_PORT};
 use cubeharbor_core::labels;
@@ -23,26 +19,20 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::users::{Identity, Role};
-use crate::{COOKIE, St, site, views};
+use crate::error::{AppError, api_failure, public};
+use crate::{AppState, St, site, valid_label, valid_name, views};
 
-pub struct AppError(anyhow::Error);
-
-impl<E: Into<anyhow::Error>> From<E> for AppError {
-    fn from(e: E) -> Self {
-        Self(e.into())
-    }
-}
-
-impl IntoResponse for AppError {
-    fn into_response(self) -> Response {
-        tracing::warn!("request failed: {:#}", self.0);
-        (StatusCode::INTERNAL_SERVER_ERROR, Html(views::error_page(&format!("{:#}", self.0)).into_string())).into_response()
+/// Environment variables can hold credentials (`spec.env`, e.g. an API key for a mod), and
+/// viewers and operators get to read a server's config but not its secrets.
+pub fn mask_env(me: &Identity, s: &mut MinecraftServer) {
+    if !me.can(Role::Admin) {
+        s.spec.env.values_mut().for_each(|v| *v = "********".into());
     }
 }
 
 type R<T = Response> = Result<T, AppError>;
 
-fn html(m: maud::Markup) -> Response {
+pub fn html(m: maud::Markup) -> Response {
     Html(m.into_string()).into_response()
 }
 
@@ -52,55 +42,6 @@ async fn list_servers(st: &St) -> anyhow::Result<Vec<MinecraftServer>> {
     items.retain(|s| st.ns_allowed(&s.namespace().unwrap_or_default()));
     items.sort_by_key(|s| (s.namespace(), s.name_any()));
     Ok(items)
-}
-
-// ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
-
-pub async fn login_page() -> Response {
-    html(views::login(None))
-}
-
-#[derive(Deserialize)]
-pub struct LoginForm {
-    #[serde(default)]
-    username: String,
-    password: String,
-}
-
-pub async fn login(
-    st: St,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    jar: CookieJar,
-    headers: HeaderMap,
-    Form(f): Form<LoginForm>,
-) -> Response {
-    let client = st.client_ip(Some(peer.ip()), &headers);
-    if st.throttled(client) {
-        return (StatusCode::TOO_MANY_REQUESTS, html(views::login(Some("Too many failed attempts, try again in a minute")))).into_response();
-    }
-    let user = f.username.trim().to_lowercase();
-    if st.check_login(&user, &f.password, client).await.is_none() {
-        return (StatusCode::UNAUTHORIZED, html(views::login(Some("Wrong user name or password")))).into_response();
-    }
-    tracing::info!("{user} logged in from {client}");
-    let token = match st.users.new_session(&user) {
-        Ok(t) => t,
-        Err(e) => return AppError::from(e).into_response(),
-    };
-    let https = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("https"));
-    let secure = if st.cfg.cookie_secure || https { "; Secure" } else { "" };
-    let cookie = Cookie::parse(format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}{secure}", crate::SESSION_TTL.as_secs()))
-        .expect("static cookie format");
-    (jar.add(cookie), Redirect::to("/")).into_response()
-}
-
-pub async fn logout(st: St, jar: CookieJar) -> Response {
-    if let Some(c) = jar.get(COOKIE) {
-        st.users.end_session(c.value());
-    }
-    (jar.remove(Cookie::build(COOKIE).path("/")), Redirect::to("/login")).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -196,9 +137,10 @@ pub async fn quick_create(st: St, Form(f): Form<QuickForm>) -> R {
     if !f.namespace.trim().is_empty() {
         doc["namespace"] = json!(f.namespace.trim());
     }
-    let out = compose::parse(&serde_norway::to_string(&doc)?)?;
+    let out = compose::parse(&serde_norway::to_string(&doc)?).map_err(invalid)?;
     let created = apply(&st, &out).await?;
-    Ok(Redirect::to(&format!("/servers/{}", created[0])).into_response())
+    let first = created.first().ok_or_else(|| public(StatusCode::BAD_REQUEST, "The form didn't describe a server."))?;
+    Ok(Redirect::to(&format!("/servers/{first}")).into_response())
 }
 
 #[derive(Deserialize)]
@@ -209,8 +151,13 @@ pub struct ComposeForm {
     rehost: Option<String>,
 }
 
+/// A compose file the user got wrong (its message only quotes what they sent).
+fn invalid(e: anyhow::Error) -> anyhow::Error {
+    public(StatusCode::BAD_REQUEST, format!("{e:#}"))
+}
+
 fn parse_form(st: &St, f: &ComposeForm) -> anyhow::Result<ComposeOutput> {
-    let mut out = compose::parse(&f.compose)?;
+    let mut out = compose::parse(&f.compose).map_err(invalid)?;
     if f.rehost.is_some() {
         compose::rehost(&mut out, &st.cfg.base_domain);
     }
@@ -234,12 +181,20 @@ pub async fn compose_apply(st: St, Form(f): Form<ComposeForm>) -> R {
     Ok(Redirect::to("/").into_response())
 }
 
-/// Server-side apply every server in a compose result. Returns `ns/name` of each.
+/// Server-side apply every server in a compose result. Returns `ns/name` of each. Everything is
+/// checked before the first write, so a refused server doesn't leave half a file applied.
 pub async fn apply(st: &St, out: &ComposeOutput) -> anyhow::Result<Vec<String>> {
-    let mut done = vec![];
-    for m in out.manifests(Some(&st.cfg.default_namespace)) {
+    let manifests = out.manifests(Some(&st.cfg.default_namespace));
+    for m in &manifests {
         let ns = m.namespace().unwrap_or_else(|| st.cfg.default_namespace.clone());
-        st.check_ns(&ns)?;
+        st.check_ns(&ns).map_err(|e| public(StatusCode::FORBIDDEN, e.to_string()))?;
+        if !valid_label(&ns) || !valid_name(&m.name_any()) {
+            return Err(public(StatusCode::BAD_REQUEST, format!("{ns}/{} is not a valid namespace and server name.", m.name_any())));
+        }
+    }
+    let mut done = vec![];
+    for m in manifests {
+        let ns = m.namespace().unwrap_or_else(|| st.cfg.default_namespace.clone());
         let api: Api<MinecraftServer> = Api::namespaced(st.client.clone(), &ns);
         let mut v = serde_json::to_value(&m)?;
         v.as_object_mut().map(|o| o.remove("status"));
@@ -251,7 +206,8 @@ pub async fn apply(st: &St, out: &ComposeOutput) -> anyhow::Result<Vec<String>> 
 
 pub async fn server_page(st: St, Extension(me): Extension<Identity>, Path((ns, name)): Path<(String, String)>) -> R {
     let api: Api<MinecraftServer> = Api::namespaced(st.client.clone(), &ns);
-    let mcs = api.get(&name).await?;
+    let mut mcs = api.get(&name).await?;
+    mask_env(&me, &mut mcs);
     let mut spec = serde_json::to_value(&mcs.spec)?;
     prune_nulls(&mut spec);
     let spec_yaml = serde_norway::to_string(&spec)?;
@@ -288,7 +244,7 @@ pub async fn server_action(st: St, Path((ns, name, action)): Path<(String, Strin
                 let pvcs: Api<PersistentVolumeClaim> = Api::namespaced(st.client.clone(), &ns);
                 let pvc = format!("data-{name}-0");
                 ignore_not_found(pvcs.delete(&pvc, &DeleteParams::default()).await).map_err(|e| {
-                    anyhow::anyhow!("server {ns}/{name} was deleted, but its world volume {pvc} was not: {e}. Delete it with: kubectl -n {ns} delete pvc {pvc}")
+                    public(StatusCode::BAD_GATEWAY, format!("server {ns}/{name} was deleted, but its world volume {pvc} was not: {e}. Delete it with: kubectl -n {ns} delete pvc {pvc}"))
                 })?;
             }
             return Ok(Redirect::to("/").into_response());
@@ -312,7 +268,7 @@ pub struct SpecForm {
 }
 
 pub async fn update_spec(st: St, Path((ns, name)): Path<(String, String)>, Form(f): Form<SpecForm>) -> R {
-    let spec: MinecraftServerSpec = serde_norway::from_str(&f.spec).map_err(|e| anyhow::anyhow!("invalid spec: {e}"))?;
+    let spec: MinecraftServerSpec = serde_norway::from_str(&f.spec).map_err(|e| public(StatusCode::BAD_REQUEST, format!("invalid spec: {e}")))?;
     let api: Api<MinecraftServer> = Api::namespaced(st.client.clone(), &ns);
     let mut current = api.get(&name).await?;
     current.spec = spec;
@@ -326,7 +282,13 @@ pub struct ConsoleForm {
     command: String,
 }
 
+/// Longest command an RCON packet can carry.
+const MAX_CONSOLE_COMMAND: usize = 1446;
+
 pub async fn console(st: St, Path((ns, name)): Path<(String, String)>, Form(f): Form<ConsoleForm>) -> Response {
+    if f.command.trim().is_empty() || f.command.len() > MAX_CONSOLE_COMMAND {
+        return (StatusCode::BAD_REQUEST, format!("console error: a command is 1 to {MAX_CONSOLE_COMMAND} bytes")).into_response();
+    }
     let run = async {
         let secrets: Api<Secret> = Api::namespaced(st.client.clone(), &ns);
         let s = secrets.get(&format!("{name}-cubeharbor")).await?;
@@ -341,7 +303,10 @@ pub async fn console(st: St, Path((ns, name)): Path<(String, String)>, Form(f): 
     match run.await {
         Ok(out) if out.is_empty() => "(no output)".into_response(),
         Ok(out) => out.into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, format!("console error: {e:#}")).into_response(),
+        Err(e) => {
+            tracing::warn!("console of {ns}/{name}: {e:#}");
+            (StatusCode::BAD_GATEWAY, "console error: can't reach the server's console (is it running?)").into_response()
+        }
     }
 }
 
@@ -351,17 +316,45 @@ pub struct LogQuery {
     container: Option<String>,
 }
 
-pub async fn logs(
-    st: St,
-    Path((ns, name)): Path<(String, String)>,
-    Query(q): Query<LogQuery>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+pub async fn logs(st: St, Extension(me): Extension<Identity>, Path((ns, name)): Path<(String, String)>, Query(q): Query<LogQuery>) -> Response {
+    let Ok(permit) = st.log_streams.clone().try_acquire_owned() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "too many open log streams, try again later").into_response();
+    };
     let pods: Api<Pod> = Api::namespaced(st.client.clone(), &ns);
     let pod = format!("{name}-0");
     let container = q.container.filter(|c| c == "install" || c == "server").unwrap_or_else(|| "server".into());
     let lp = LogParams { follow: true, tail_lines: Some(site::get().console.tail_lines), container: Some(container), ..Default::default() };
-    let stream = async_stream(pods, pod, lp);
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    let stream = async_stream(pods, pod, lp).take_until(stream_end(st.0.clone(), me)).map(move |event| {
+        let _open = &permit;
+        event
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+}
+
+/// How often an open log stream re-checks that its viewer may still see it.
+const STREAM_RECHECK: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Is the login behind `me` still good? (An API token's user has to exist; revoking the token
+/// itself only takes effect on the next request.)
+pub fn still_logged_in(st: &AppState, me: &Identity) -> bool {
+    match &me.session {
+        Some(token) => st.users.session(token).is_some(),
+        None => st.users.role_of(&me.name).is_some(),
+    }
+}
+
+/// Resolves when a log stream has to end: at shutdown, or once its login is gone.
+async fn stream_end(st: std::sync::Arc<AppState>, me: Identity) {
+    let mut stop = st.stop.subscribe();
+    let logged_out = async {
+        while still_logged_in(&st, &me) {
+            tokio::time::sleep(STREAM_RECHECK).await;
+        }
+    };
+    tokio::select! {
+        _ = stop.wait_for(|s| *s) => {}
+        _ = logged_out => {}
+    }
 }
 
 fn async_stream(pods: Api<Pod>, pod: String, lp: LogParams) -> impl Stream<Item = Result<Event, Infallible>> {
@@ -371,7 +364,10 @@ fn async_stream(pods: Api<Pod>, pod: String, lp: LogParams) -> impl Stream<Item 
                 .lines()
                 .map(|l| Ok(Event::default().data(l.unwrap_or_else(|e| format!("[log error: {e}]")))))
                 .boxed(),
-            Err(e) => futures::stream::once(async move { Ok(Event::default().event("error").data(format!("logs unavailable: {e}"))) }).boxed(),
+            Err(e) => {
+                tracing::warn!("logs unavailable: {e}");
+                futures::stream::once(async move { Ok(Event::default().event("error").data("logs unavailable (is the server running?)")) }).boxed()
+            }
         })
 }
 
@@ -379,8 +375,9 @@ fn async_stream(pods: Api<Pod>, pod: String, lp: LogParams) -> impl Stream<Item 
 // JSON API
 // ---------------------------------------------------------------------------
 
-pub async fn api_servers(st: St) -> R {
-    let servers = list_servers(&st).await?;
+pub async fn api_servers(st: St, Extension(me): Extension<Identity>) -> R {
+    let mut servers = list_servers(&st).await?;
+    servers.iter_mut().for_each(|s| mask_env(&me, s));
     Ok(Json(servers).into_response())
 }
 
@@ -401,7 +398,7 @@ pub async fn api_compose(st: St, Query(q): Query<ComposeQuery>, body: String) ->
     }
     match apply(&st, &out).await {
         Ok(applied) => Json(json!({ "applied": applied, "warnings": out.warnings })).into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("{e:#}") }))).into_response(),
+        Err(e) => api_failure(e),
     }
 }
 
@@ -412,10 +409,21 @@ pub struct SearchQuery {
     source: Option<String>,
 }
 
+/// Longest modpack search sent on to Modrinth or CurseForge.
+const MAX_SEARCH_QUERY: usize = 200;
+
 pub async fn api_search(st: St, Query(q): Query<SearchQuery>) -> R {
+    if q.q.len() > MAX_SEARCH_QUERY {
+        return Err(public(StatusCode::BAD_REQUEST, "That search is too long.").into());
+    }
+    let upstream = |e: anyhow::Error| {
+        tracing::warn!("modpack search: {e:#}");
+        public(StatusCode::BAD_GATEWAY, "The modpack search failed; try again later.")
+    };
     let hits: Vec<BTreeMap<&str, Value>> = if q.source.as_deref() == Some("curseforge") {
         curseforge::search_modpacks(&st.http, &q.q, site::get().new_server.search_results)
-            .await?
+            .await
+            .map_err(upstream)?
             .into_iter()
             .map(|m| {
                 BTreeMap::from([
@@ -429,7 +437,8 @@ pub async fn api_search(st: St, Query(q): Query<SearchQuery>) -> R {
             .collect()
     } else {
         modrinth::search(&st.http, &q.q, "modpack", site::get().new_server.search_results)
-            .await?
+            .await
+            .map_err(upstream)?
             .into_iter()
             .map(|h| {
                 BTreeMap::from([
@@ -443,254 +452,6 @@ pub async fn api_search(st: St, Query(q): Query<SearchQuery>) -> R {
             .collect()
     };
     Ok(Json(hits).into_response())
-}
-
-// ---------------------------------------------------------------------------
-// Account
-// ---------------------------------------------------------------------------
-
-/// Shortest password the dashboard accepts when it's changed from the UI.
-pub const MIN_PASSWORD_LEN: usize = 12;
-
-pub async fn account_page(st: St, Extension(me): Extension<Identity>) -> Response {
-    html(views::account(&st, &me, None, None))
-}
-
-#[derive(Deserialize)]
-pub struct PasswordForm {
-    current: String,
-    new: String,
-    confirm: String,
-}
-
-/// Is `new` acceptable as the next password?
-fn check_new_password(current: &str, new: &str, confirm: &str) -> Result<(), String> {
-    if new.chars().count() < MIN_PASSWORD_LEN || new.trim().is_empty() {
-        return Err(format!("The new password must be at least {MIN_PASSWORD_LEN} characters."));
-    }
-    if new != confirm {
-        return Err("The new password and its confirmation don't match.".into());
-    }
-    if new == current {
-        return Err("The new password is the same as the current one.".into());
-    }
-    Ok(())
-}
-
-/// Re-check the caller's own password before changing credentials, like a login (with the
-/// failed-attempt limits), so a stolen session can't be turned into a password, a token or a
-/// new admin.
-async fn confirm_own_password(st: &St, me: &Identity, pw: &str, peer: SocketAddr, headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {
-    let client = st.client_ip(Some(peer.ip()), headers);
-    if st.throttled(client) {
-        return Err((StatusCode::TOO_MANY_REQUESTS, "Too many failed attempts, try again in a minute."));
-    }
-    if st.check_login(&me.name, pw, client).await.is_none() {
-        return Err((StatusCode::UNAUTHORIZED, "Your current password is wrong."));
-    }
-    Ok(())
-}
-
-pub async fn change_password(
-    st: St,
-    Extension(me): Extension<Identity>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Form(f): Form<PasswordForm>,
-) -> Response {
-    let page = |status: StatusCode, msg: Result<&str, &str>| (status, html(views::account(&st, &me, Some(msg), None))).into_response();
-    if !st.users.editable() {
-        return page(StatusCode::BAD_REQUEST, Err("Changing passwords here is turned off (dashboard.manageUsers)."));
-    }
-    if let Err((code, e)) = confirm_own_password(&st, &me, &f.current, peer, &headers).await {
-        return page(code, Err(e));
-    }
-    if let Err(e) = check_new_password(&f.current, &f.new, &f.confirm) {
-        return page(StatusCode::BAD_REQUEST, Err(&e));
-    }
-    let saved = async {
-        let hash = st.users.hash(&f.new).await?;
-        st.users.update(|s| { s.get_mut(&me.name)?.password = hash; Ok(()) }).await
-    };
-    if let Err(e) = saved.await {
-        tracing::warn!("could not change the password of {}: {e:#}", me.name);
-        return page(StatusCode::BAD_GATEWAY, Err("Could not save the new password (see the dashboard logs). Nothing was changed."));
-    }
-    // Keeps only the caller's session. With a token there is no cookie, so every session ends.
-    st.users.end_sessions_of(&me.name, me.session.as_deref());
-    tracing::info!("{} changed their password; their other sessions were logged out", me.name);
-    page(StatusCode::OK, Ok("Password changed. Your other sessions have been logged out."))
-}
-
-#[derive(Deserialize)]
-pub struct TokenForm {
-    name: String,
-    current: String,
-}
-
-pub async fn create_token(
-    st: St,
-    Extension(me): Extension<Identity>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Form(f): Form<TokenForm>,
-) -> Response {
-    let page = |status: StatusCode, msg: Result<&str, &str>, token: Option<&str>| (status, html(views::account(&st, &me, Some(msg), token))).into_response();
-    if let Err((code, e)) = confirm_own_password(&st, &me, &f.current, peer, &headers).await {
-        return page(code, Err(e), None);
-    }
-    match st.users.create_token(&me.name, &f.name).await {
-        Ok(token) => {
-            tracing::info!("{} created API token {:?}", me.name, f.name.trim());
-            page(StatusCode::OK, Ok("Token created. Copy it now: it is not shown again."), Some(&token))
-        }
-        Err(e) => page(StatusCode::BAD_REQUEST, Err(&format!("{e:#}")), None),
-    }
-}
-
-pub async fn revoke_token(st: St, Extension(me): Extension<Identity>, Path(id): Path<String>) -> Response {
-    let msg = st.users.revoke_token(&me.name, &id).await.map(|_| "Token revoked.").map_err(|e| format!("{e:#}"));
-    let status = if msg.is_ok() { StatusCode::OK } else { StatusCode::BAD_REQUEST };
-    (status, html(views::account(&st, &me, Some(msg.as_deref().map_err(String::as_str)), None))).into_response()
-}
-
-// ---------------------------------------------------------------------------
-// Users (admin only, enforced by `users::required_role`)
-// ---------------------------------------------------------------------------
-
-fn users_page_with(st: &St, me: &Identity, status: StatusCode, msg: Result<&str, &str>) -> Response {
-    (status, html(views::users(st, me, Some(msg)))).into_response()
-}
-
-pub async fn users_page(st: St, Extension(me): Extension<Identity>) -> Response {
-    html(views::users(&st, &me, None))
-}
-
-#[derive(Deserialize)]
-pub struct AddUserForm {
-    name: String,
-    role: String,
-    password: String,
-    current: String,
-}
-
-pub async fn add_user(
-    st: St,
-    Extension(me): Extension<Identity>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Form(f): Form<AddUserForm>,
-) -> Response {
-    if let Err((code, e)) = confirm_own_password(&st, &me, &f.current, peer, &headers).await {
-        return users_page_with(&st, &me, code, Err(e));
-    }
-    let name = f.name.trim().to_lowercase();
-    let added = async {
-        let role = Role::parse(&f.role).ok_or_else(|| anyhow::anyhow!("Unknown role {}.", f.role))?;
-        check_new_password("", &f.password, &f.password).map_err(anyhow::Error::msg)?;
-        crate::users::check_name(&name)?;
-        let hash = st.users.hash(&f.password).await?;
-        st.users.update(|s| s.add(&name, role, hash)).await?;
-        tracing::info!("{} added user {name} ({})", me.name, role.as_str());
-        anyhow::Ok(())
-    };
-    match added.await {
-        Ok(()) => users_page_with(&st, &me, StatusCode::OK, Ok(&format!("Added {name}. Give them their password; they can change it on their Account page."))),
-        Err(e) => users_page_with(&st, &me, StatusCode::BAD_REQUEST, Err(&format!("{e:#}"))),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct RoleForm {
-    role: String,
-}
-
-pub async fn set_role(st: St, Extension(me): Extension<Identity>, Path(name): Path<String>, Form(f): Form<RoleForm>) -> Response {
-    let changed = async {
-        let role = Role::parse(&f.role).ok_or_else(|| anyhow::anyhow!("Unknown role {}.", f.role))?;
-        st.users.update(|s| { s.get_mut(&name)?.role = role; Ok(()) }).await?;
-        tracing::info!("{} made {name} {}", me.name, role.as_str());
-        anyhow::Ok(role)
-    };
-    match changed.await {
-        // Demoting yourself: the users page is no longer yours to see.
-        Ok(_) if name == me.name && st.users.role_of(&me.name) != Some(Role::Admin) => Redirect::to("/account").into_response(),
-        Ok(role) => users_page_with(&st, &me, StatusCode::OK, Ok(&format!("{name} is now {}.", role.as_str()))),
-        Err(e) => users_page_with(&st, &me, StatusCode::BAD_REQUEST, Err(&format!("{e:#}"))),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct ResetForm {
-    password: String,
-    current: String,
-}
-
-/// Set someone else's password. Ends all their sessions and revokes their API tokens, since a
-/// reset usually means the account can't be trusted any more.
-pub async fn reset_password(
-    st: St,
-    Extension(me): Extension<Identity>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Path(name): Path<String>,
-    Form(f): Form<ResetForm>,
-) -> Response {
-    if name == me.name {
-        return users_page_with(&st, &me, StatusCode::BAD_REQUEST, Err("Change your own password on the Account page."));
-    }
-    if let Err((code, e)) = confirm_own_password(&st, &me, &f.current, peer, &headers).await {
-        return users_page_with(&st, &me, code, Err(e));
-    }
-    let reset = async {
-        check_new_password("", &f.password, &f.password).map_err(anyhow::Error::msg)?;
-        let hash = st.users.hash(&f.password).await?;
-        st.users.update(|s| {
-            let u = s.get_mut(&name)?;
-            u.password = hash;
-            u.tokens.clear();
-            Ok(())
-        })
-        .await
-    };
-    match reset.await {
-        Ok(()) => {
-            st.users.end_sessions_of(&name, None);
-            tracing::info!("{} reset the password of {name}; their sessions and tokens were revoked", me.name);
-            users_page_with(&st, &me, StatusCode::OK, Ok(&format!("New password set for {name}. Their sessions and API tokens were revoked.")))
-        }
-        Err(e) => users_page_with(&st, &me, StatusCode::BAD_REQUEST, Err(&format!("{e:#}"))),
-    }
-}
-
-pub async fn remove_user(st: St, Extension(me): Extension<Identity>, Path(name): Path<String>) -> Response {
-    match st.users.update(|s| s.remove(&name)).await {
-        Ok(()) => {
-            st.users.end_sessions_of(&name, None);
-            tracing::info!("{} removed user {name}", me.name);
-            if name == me.name {
-                return Redirect::to("/login").into_response();
-            }
-            users_page_with(&st, &me, StatusCode::OK, Ok(&format!("Removed {name}.")))
-        }
-        Err(e) => users_page_with(&st, &me, StatusCode::BAD_REQUEST, Err(&format!("{e:#}"))),
-    }
-}
-
-#[cfg(test)]
-mod account_tests {
-    use super::*;
-
-    #[test]
-    fn new_password_rules() {
-        assert!(check_new_password("old-password-1", "correct horse battery", "correct horse battery").is_ok());
-        assert!(check_new_password("old", "short", "short").is_err());
-        assert!(check_new_password("old", "            ", "            ").is_err(), "whitespace only");
-        assert!(check_new_password("old", "correct horse battery", "correct horse batterY").is_err());
-        assert!(check_new_password("same-password-1", "same-password-1", "same-password-1").is_err());
-        // Length counts characters, not bytes.
-        assert!(check_new_password("old", "ééééééééééé", "ééééééééééé").is_err());
-    }
 }
 
 #[cfg(test)]

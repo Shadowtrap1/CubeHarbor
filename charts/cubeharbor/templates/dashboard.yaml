@@ -164,6 +164,7 @@ spec:
           env:
             - { name: LOG_FORMAT, value: {{ .Values.logFormat | default "text" | quote }} }
             - { name: LISTEN_ADDR, value: {{ include "cubeharbor.listen" (dict "root" . "port" 8080) | quote }} }
+            - { name: HEALTH_ADDR, value: {{ include "cubeharbor.listen" (dict "root" . "port" 8081) | quote }} }
             - name: DASHBOARD_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ $secretName }}, key: password } }
             {{- if $manageUsers }}
@@ -191,8 +192,9 @@ spec:
             - { name: site, mountPath: /etc/cubeharbor-dashboard, readOnly: true }
           ports:
             - { name: http, containerPort: 8080 }
+            - { name: health, containerPort: 8081, protocol: TCP }
           readinessProbe:
-            httpGet: { path: /healthz, port: http }
+            httpGet: { path: /readyz, port: health }
           livenessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 20
