@@ -20,6 +20,8 @@ struct Cli {
 enum Cmd {
     /// Print the MinecraftServer CustomResourceDefinition.
     Crd,
+    /// Print the backup CustomResourceDefinitions (MinecraftBackup, schedule and restore).
+    BackupCrds,
     /// Convert a compose file (cubeharbor or docker-compose) into MinecraftServer manifests.
     Render {
         /// One or more compose files; several are imported together (e.g. servers/*/compose.yaml).
@@ -139,6 +141,17 @@ fn join_addr(host: &str, port: u16) -> String {
     }
 }
 
+fn backup_crds() -> Result<String> {
+    use cubeharbor_core::backup::{MinecraftBackup, MinecraftBackupSchedule, MinecraftRestore};
+    let mut docs = vec![];
+    for crd in [MinecraftBackup::crd(), MinecraftBackupSchedule::crd(), MinecraftRestore::crd()] {
+        let mut crd = serde_json::to_value(crd)?;
+        strip_formats(&mut crd);
+        docs.push(serde_norway::to_string(&crd)?);
+    }
+    Ok(docs.join("---\n"))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().cmd {
@@ -147,6 +160,7 @@ async fn main() -> Result<()> {
             strip_formats(&mut crd);
             print!("{}", serde_norway::to_string(&crd)?)
         }
+        Cmd::BackupCrds => print!("{}", backup_crds()?),
         Cmd::Render { files, namespace, rehost } => print!("{}", load_many(&files, rehost.as_deref())?.to_yaml(Some(&namespace))?),
         Cmd::Resolve { file } => {
             let http = cubeharbor_core::sources::Http::from_env()?;
@@ -188,6 +202,15 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The image build has no chart, so this only compares when the file is there.
+    #[test]
+    fn backup_crds_match_the_chart() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../charts/cubeharbor/crds/backups.yaml");
+        if let Ok(shipped) = std::fs::read_to_string(path) {
+            assert_eq!(shipped, backup_crds().unwrap(), "run `make crd` and commit the result");
+        }
+    }
 
     #[test]
     fn split_addr_forms() {

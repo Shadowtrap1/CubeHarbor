@@ -11,6 +11,7 @@ lint:
 # Regenerate the CRD shipped in the chart from the Rust types.
 crd:
 	cargo run -q -p cubeharbor -- crd > charts/cubeharbor/crds/minecraftservers.yaml
+	cargo run -q -p cubeharbor -- backup-crds > charts/cubeharbor/crds/backups.yaml
 
 images:
 	REGISTRY=$(REGISTRY) TAG=$(TAG) docker buildx bake --load

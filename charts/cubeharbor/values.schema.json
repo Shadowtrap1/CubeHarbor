@@ -290,6 +290,15 @@
         }
       }
     },
+    "backups": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Run the backup, schedule and restore controllers." },
+        "jobResources": { "type": "object", "description": "Container resources of backup and restore Jobs." },
+        "jobTtlSeconds": { "type": "integer", "minimum": 0, "description": "How long finished Jobs are kept." }
+      }
+    },
     "operator": {
       "type": "object",
       "properties": {

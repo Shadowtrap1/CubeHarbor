@@ -1,0 +1,516 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: minecraftbackups.cubeharbor.dev
+spec:
+  group: cubeharbor.dev
+  names:
+    kind: MinecraftBackup
+    plural: minecraftbackups
+    shortNames:
+    - mcb
+    singular: minecraftbackup
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.server
+      name: Server
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.mode
+      name: Mode
+      type: string
+    - jsonPath: .status.sizeBytes
+      name: Size
+      type: integer
+    - jsonPath: .status.completedAt
+      name: Completed
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for MinecraftBackupSpec via `CustomResource`
+        properties:
+          spec:
+            description: One backup of one server. Create it to back up now; deleting it keeps the stored archive.
+            properties:
+              exclude:
+                description: Paths relative to the server directory to leave out, on top of logs, caches and crash reports.
+                items:
+                  type: string
+                type: array
+              server:
+                description: Name of the `MinecraftServer` in this namespace.
+                type: string
+              storage:
+                description: Where backups are kept. Set exactly one backend.
+                properties:
+                  pvc:
+                    description: |-
+                      A PersistentVolumeClaim in the server's namespace. Use ReadWriteMany (or a volume on the
+                      server's node): the backup of a running server runs next to the server.
+                    nullable: true
+                    properties:
+                      claimName:
+                        type: string
+                      subPath:
+                        description: Directory inside the volume.
+                        nullable: true
+                        type: string
+                    required:
+                    - claimName
+                    type: object
+                  s3:
+                    description: An S3-compatible bucket (AWS, MinIO, R2, Backblaze B2...).
+                    nullable: true
+                    properties:
+                      bucket:
+                        type: string
+                      credentialsSecret:
+                        description: An existing Secret in the server's namespace. Only the backup Job reads it.
+                        properties:
+                          accessKeyIdKey:
+                            description: Key holding the access key ID. Default `accessKeyId`.
+                            nullable: true
+                            type: string
+                          name:
+                            type: string
+                          secretAccessKeyKey:
+                            description: Key holding the secret access key. Default `secretAccessKey`.
+                            nullable: true
+                            type: string
+                          sessionTokenKey:
+                            description: Key holding a session token, used when the Secret has it. Default `sessionToken`.
+                            nullable: true
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      endpoint:
+                        description: '`https://...` of the service. AWS when omitted.'
+                        nullable: true
+                        type: string
+                      pathStyle:
+                        description: |-
+                          `<endpoint>/<bucket>/<key>` instead of `<bucket>.<endpoint>/<key>`. Defaults to true with
+                          a custom endpoint and false on AWS.
+                        nullable: true
+                        type: boolean
+                      prefix:
+                        description: Key prefix inside the bucket.
+                        nullable: true
+                        type: string
+                      region:
+                        default: us-east-1
+                        type: string
+                    required:
+                    - bucket
+                    - credentialsSecret
+                    type: object
+                type: object
+              timeoutSeconds:
+                description: Give up after this long. Default 21600 (6 hours).
+                minimum: 0.0
+                nullable: true
+                type: integer
+            required:
+            - server
+            - storage
+            type: object
+          status:
+            nullable: true
+            properties:
+              completedAt:
+                nullable: true
+                type: string
+              key:
+                description: Where the archive is, relative to the storage.
+                nullable: true
+                type: string
+              message:
+                nullable: true
+                type: string
+              mode:
+                description: '`online` (saves paused over RCON) or `offline` (server stopped).'
+                nullable: true
+                type: string
+              phase:
+                default: Pending
+                enum:
+                - Pending
+                - Running
+                - Completed
+                - Failed
+                type: string
+              sha256:
+                nullable: true
+                type: string
+              sizeBytes:
+                minimum: 0.0
+                nullable: true
+                type: integer
+              startedAt:
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: MinecraftBackup
+        type: object
+        x-kubernetes-validations:
+        - message: metadata.name must be a DNS-1035 label of at most 52 characters
+          rule: self.metadata.name.size() <= 52 && self.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: minecraftbackupschedules.cubeharbor.dev
+spec:
+  group: cubeharbor.dev
+  names:
+    kind: MinecraftBackupSchedule
+    plural: minecraftbackupschedules
+    shortNames:
+    - mcbs
+    singular: minecraftbackupschedule
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.server
+      name: Server
+      type: string
+    - jsonPath: .spec.schedule
+      name: Schedule
+      type: string
+    - jsonPath: .status.lastScheduleTime
+      name: Last
+      type: date
+    - jsonPath: .status.nextScheduleTime
+      name: Next
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for MinecraftBackupScheduleSpec via `CustomResource`
+        properties:
+          spec:
+            description: Backs a server up on a cron schedule and prunes old backups.
+            properties:
+              exclude:
+                items:
+                  type: string
+                type: array
+              retention:
+                default: {}
+                description: Which backups to keep. Everything is kept when empty.
+                properties:
+                  keepDays:
+                    description: Remove backups older than this many days.
+                    minimum: 0.0
+                    nullable: true
+                    type: integer
+                  keepLast:
+                    description: Keep this many newest successful backups.
+                    minimum: 0.0
+                    nullable: true
+                    type: integer
+                type: object
+              schedule:
+                description: Five-field cron expression in UTC, or `@hourly`, `@daily`, `@weekly`, `@monthly`.
+                type: string
+              server:
+                type: string
+              storage:
+                description: Where backups are kept. Set exactly one backend.
+                properties:
+                  pvc:
+                    description: |-
+                      A PersistentVolumeClaim in the server's namespace. Use ReadWriteMany (or a volume on the
+                      server's node): the backup of a running server runs next to the server.
+                    nullable: true
+                    properties:
+                      claimName:
+                        type: string
+                      subPath:
+                        description: Directory inside the volume.
+                        nullable: true
+                        type: string
+                    required:
+                    - claimName
+                    type: object
+                  s3:
+                    description: An S3-compatible bucket (AWS, MinIO, R2, Backblaze B2...).
+                    nullable: true
+                    properties:
+                      bucket:
+                        type: string
+                      credentialsSecret:
+                        description: An existing Secret in the server's namespace. Only the backup Job reads it.
+                        properties:
+                          accessKeyIdKey:
+                            description: Key holding the access key ID. Default `accessKeyId`.
+                            nullable: true
+                            type: string
+                          name:
+                            type: string
+                          secretAccessKeyKey:
+                            description: Key holding the secret access key. Default `secretAccessKey`.
+                            nullable: true
+                            type: string
+                          sessionTokenKey:
+                            description: Key holding a session token, used when the Secret has it. Default `sessionToken`.
+                            nullable: true
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      endpoint:
+                        description: '`https://...` of the service. AWS when omitted.'
+                        nullable: true
+                        type: string
+                      pathStyle:
+                        description: |-
+                          `<endpoint>/<bucket>/<key>` instead of `<bucket>.<endpoint>/<key>`. Defaults to true with
+                          a custom endpoint and false on AWS.
+                        nullable: true
+                        type: boolean
+                      prefix:
+                        description: Key prefix inside the bucket.
+                        nullable: true
+                        type: string
+                      region:
+                        default: us-east-1
+                        type: string
+                    required:
+                    - bucket
+                    - credentialsSecret
+                    type: object
+                type: object
+              suspend:
+                default: false
+                description: Stop creating backups. Existing ones are kept.
+                type: boolean
+            required:
+            - schedule
+            - server
+            - storage
+            type: object
+          status:
+            nullable: true
+            properties:
+              activeBackup:
+                description: The backup in progress.
+                nullable: true
+                type: string
+              lastScheduleTime:
+                nullable: true
+                type: string
+              lastSuccessfulBackup:
+                description: The newest backup that succeeded.
+                nullable: true
+                type: string
+              message:
+                nullable: true
+                type: string
+              nextScheduleTime:
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: MinecraftBackupSchedule
+        type: object
+        x-kubernetes-validations:
+        - message: metadata.name must be a DNS-1035 label of at most 40 characters
+          rule: self.metadata.name.size() <= 40 && self.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: minecraftrestores.cubeharbor.dev
+spec:
+  group: cubeharbor.dev
+  names:
+    kind: MinecraftRestore
+    plural: minecraftrestores
+    shortNames:
+    - mcr
+    singular: minecraftrestore
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.target.server
+      name: Server
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.completedAt
+      name: Completed
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for MinecraftRestoreSpec via `CustomResource`
+        properties:
+          spec:
+            description: Replaces a server's data with a backup. The server is stopped while it runs.
+            properties:
+              source:
+                description: Either `backup`, or `storage` and `key` for an archive with no `MinecraftBackup` here.
+                properties:
+                  backup:
+                    description: Name of a completed `MinecraftBackup` in this namespace.
+                    nullable: true
+                    type: string
+                  key:
+                    nullable: true
+                    type: string
+                  storage:
+                    description: Where backups are kept. Set exactly one backend.
+                    nullable: true
+                    properties:
+                      pvc:
+                        description: |-
+                          A PersistentVolumeClaim in the server's namespace. Use ReadWriteMany (or a volume on the
+                          server's node): the backup of a running server runs next to the server.
+                        nullable: true
+                        properties:
+                          claimName:
+                            type: string
+                          subPath:
+                            description: Directory inside the volume.
+                            nullable: true
+                            type: string
+                        required:
+                        - claimName
+                        type: object
+                      s3:
+                        description: An S3-compatible bucket (AWS, MinIO, R2, Backblaze B2...).
+                        nullable: true
+                        properties:
+                          bucket:
+                            type: string
+                          credentialsSecret:
+                            description: An existing Secret in the server's namespace. Only the backup Job reads it.
+                            properties:
+                              accessKeyIdKey:
+                                description: Key holding the access key ID. Default `accessKeyId`.
+                                nullable: true
+                                type: string
+                              name:
+                                type: string
+                              secretAccessKeyKey:
+                                description: Key holding the secret access key. Default `secretAccessKey`.
+                                nullable: true
+                                type: string
+                              sessionTokenKey:
+                                description: Key holding a session token, used when the Secret has it. Default `sessionToken`.
+                                nullable: true
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          endpoint:
+                            description: '`https://...` of the service. AWS when omitted.'
+                            nullable: true
+                            type: string
+                          pathStyle:
+                            description: |-
+                              `<endpoint>/<bucket>/<key>` instead of `<bucket>.<endpoint>/<key>`. Defaults to true with
+                              a custom endpoint and false on AWS.
+                            nullable: true
+                            type: boolean
+                          prefix:
+                            description: Key prefix inside the bucket.
+                            nullable: true
+                            type: string
+                          region:
+                            default: us-east-1
+                            type: string
+                        required:
+                        - bucket
+                        - credentialsSecret
+                        type: object
+                    type: object
+                type: object
+              target:
+                properties:
+                  newServer:
+                    description: A `MinecraftServer` spec, used to create the server when it doesn't exist.
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  overwriteExisting:
+                    default: false
+                    description: Must be true to replace the data of a server that already exists.
+                    type: boolean
+                  server:
+                    description: Name of the `MinecraftServer` in this namespace.
+                    type: string
+                required:
+                - server
+                type: object
+              timeoutSeconds:
+                description: Give up after this long. Default 21600 (6 hours).
+                minimum: 0.0
+                nullable: true
+                type: integer
+            required:
+            - source
+            - target
+            type: object
+          status:
+            nullable: true
+            properties:
+              completedAt:
+                nullable: true
+                type: string
+              key:
+                description: The archive being restored.
+                nullable: true
+                type: string
+              message:
+                nullable: true
+                type: string
+              phase:
+                default: Pending
+                enum:
+                - Pending
+                - Running
+                - Completed
+                - Failed
+                type: string
+              startedAt:
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: MinecraftRestore
+        type: object
+        x-kubernetes-validations:
+        - message: metadata.name must be a DNS-1035 label of at most 52 characters
+          rule: self.metadata.name.size() <= 52 && self.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')
+    served: true
+    storage: true
+    subresources:
+      status: {}

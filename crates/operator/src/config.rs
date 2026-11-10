@@ -116,6 +116,16 @@ pub struct Config {
     #[arg(long, env = "DASHBOARD_SELECTOR", default_value = "app.kubernetes.io/component=dashboard")]
     pub dashboard_selector: String,
 
+    /// Run the MinecraftBackup, MinecraftBackupSchedule and MinecraftRestore controllers.
+    #[arg(long, env = "BACKUPS_ENABLED", default_value_t = false, action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
+    pub backups_enabled: bool,
+    /// Container resources of backup and restore Jobs, as JSON.
+    #[arg(long, env = "BACKUP_JOB_RESOURCES", default_value = "{}")]
+    pub backup_job_resources: String,
+    /// How long finished backup and restore Jobs are kept.
+    #[arg(long, env = "BACKUP_JOB_TTL_SECONDS", default_value_t = 86400)]
+    pub backup_job_ttl_seconds: u32,
+
     /// CPU request for servers that don't set `resources.cpu` ("0" = no request).
     #[arg(long, env = "DEFAULT_CPU_REQUEST", default_value = defaults::CPU_REQUEST)]
     pub default_cpu_request: String,

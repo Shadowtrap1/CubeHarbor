@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 cubeharbor-core.workspace = true
+cubeharbor-backup = { path = "../backup" }
 anyhow.workspace = true
 thiserror.workspace = true
 clap.workspace = true

@@ -8,6 +8,14 @@ All notable changes are listed here. The format follows
 
 ### Added
 
+* Backups (`backups.enabled`, off by default): `MinecraftBackup` for an on-demand backup,
+  `MinecraftBackupSchedule` for cron schedules with `keepLast` / `keepDays` retention, and
+  `MinecraftRestore` to restore into an existing server (`overwriteExisting`) or a new one
+  (`newServer`). Running servers are archived between RCON `save-off` / `save-all flush` /
+  `save-on`; stopped servers are held stopped while archived. Storage backends are pluggable and
+  ship with PVC and S3-compatible storage (credentials only from an existing Secret, read by the
+  Job and never by the operator). Progress, size and checksum are in each resource's status. Run
+  `kubectl apply -f charts/cubeharbor/crds/` when upgrading. See "Backups" in the README.
 * Chart: `metrics.enabled` adds ClusterIP Services for the gateway's and the operator's
   `/metrics` (never on the public gateway Service), and `metrics.serviceMonitor.enabled` a
   Prometheus Operator ServiceMonitor for them (`labels`, `interval`, `namespace`). Both off by

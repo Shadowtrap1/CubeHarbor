@@ -161,6 +161,11 @@ spec:
             - { name: DASHBOARD_NAMESPACE, value: {{ .Release.Namespace | quote }} }
             - { name: DASHBOARD_SELECTOR, value: {{ printf "app.kubernetes.io/name=cubeharbor,app.kubernetes.io/instance=%s,app.kubernetes.io/component=dashboard" .Release.Name | quote }} }
             {{- include "cubeharbor.curseforgeEnv" . | nindent 12 }}
+            {{- if .Values.backups.enabled }}
+            - { name: BACKUPS_ENABLED, value: "true" }
+            - { name: BACKUP_JOB_RESOURCES, value: {{ .Values.backups.jobResources | toJson | quote }} }
+            - { name: BACKUP_JOB_TTL_SECONDS, value: {{ .Values.backups.jobTtlSeconds | quote }} }
+            {{- end }}
             {{- with .Values.cloudflareDdns }}
             {{- if .enabled }}
             {{- if not .existingSecret }}{{ fail "cloudflareDdns.existingSecret is required: a Secret holding the Cloudflare API token" }}{{ end }}

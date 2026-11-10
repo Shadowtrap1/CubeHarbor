@@ -459,6 +459,14 @@ pub fn network_policy_name(mcs: &MinecraftServer) -> String {
 /// compromised pod elsewhere in the cluster cannot brute-force the console.
 pub fn network_policy(mcs: &MinecraftServer, cfg: &Config) -> Result<NetworkPolicy> {
     let rcon = i32::from(RCON_PORT);
+    let mut rcon_clients = vec![json!({
+        "namespaceSelector": { "matchLabels": { "kubernetes.io/metadata.name": cfg.dashboard_namespace } },
+        "podSelector": { "matchLabels": cfg.dashboard_selector() },
+    })];
+    if cfg.backups_enabled {
+        // Only this server's own backup Jobs, which pause saves around the archive.
+        rcon_clients.push(json!({ "podSelector": { "matchLabels": crate::backup::rcon_client_labels(&mcs.name_any()) } }));
+    }
     Ok(serde_json::from_value(json!({
         "apiVersion": "networking.k8s.io/v1",
         "kind": "NetworkPolicy",
@@ -475,10 +483,7 @@ pub fn network_policy(mcs: &MinecraftServer, cfg: &Config) -> Result<NetworkPoli
                     ],
                 },
                 {
-                    "from": [{
-                        "namespaceSelector": { "matchLabels": { "kubernetes.io/metadata.name": cfg.dashboard_namespace } },
-                        "podSelector": { "matchLabels": cfg.dashboard_selector() },
-                    }],
+                    "from": rcon_clients,
                     "ports": [{ "protocol": "TCP", "port": rcon }],
                 },
             ],
@@ -663,6 +668,17 @@ mod tests {
         let v = serde_json::to_value(network_policy(&mcs, &cfg).unwrap()).unwrap();
         assert_eq!(v["spec"]["ingress"][1]["ports"][0]["port"], RCON_PORT);
         assert_eq!(v["spec"]["ingress"][0]["ports"][0]["endPort"], RCON_PORT - 1);
+    }
+
+    #[test]
+    fn backup_jobs_reach_rcon_only_when_enabled() {
+        let (mcs, mut cfg) = sample();
+        let peers = |cfg: &Config| serde_json::to_value(network_policy(&mcs, cfg).unwrap()).unwrap()["spec"]["ingress"][1]["from"].as_array().unwrap().clone();
+        assert_eq!(peers(&cfg).len(), 1, "unchanged when backups are off");
+        cfg.backups_enabled = true;
+        let with = peers(&cfg);
+        assert_eq!(with.len(), 2);
+        assert_eq!(with[1]["podSelector"]["matchLabels"]["cubeharbor.dev/backup-of"], mcs.name_any());
     }
 
     #[test]
