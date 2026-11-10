@@ -91,6 +91,7 @@ async fn main() -> Result<()> {
         gateway_sync: Notify::new(),
         stats: stats.clone(),
         recorder: Recorder::new(client.clone(), reporter),
+        failure_writes: Default::default(),
     });
 
     // Gateway ports: debounce reconcile notifications, plus a periodic sweep that catches deletions.

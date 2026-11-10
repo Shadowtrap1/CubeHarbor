@@ -157,6 +157,21 @@ pub fn status_changed(old: Option<&MinecraftServerStatus>, new: &MinecraftServer
     old.map(without_sample) != Some(without_sample(new))
 }
 
+/// True when `new` differs from `old` only in message texts (`status.message` and condition
+/// messages). Failure messages can vary per attempt (addresses, counters, timings), and each
+/// write comes back as a watch event that triggers the next attempt at once.
+pub fn only_messages_differ(old: Option<&MinecraftServerStatus>, new: &MinecraftServerStatus) -> bool {
+    let Some(old) = old else { return false };
+    let mut n = new.clone();
+    n.message = old.message.clone();
+    for c in &mut n.conditions {
+        if let Some(o) = get(&old.conditions, &c.type_) {
+            c.message = o.message.clone();
+        }
+    }
+    status_changed(Some(old), new) && !status_changed(Some(old), &n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +180,22 @@ mod tests {
 
     fn at(second: i64) -> Time {
         Time(jiff::Timestamp::from_second(second).unwrap())
+    }
+
+    #[test]
+    fn a_failure_that_only_reworded_its_message_is_recognised() {
+        let mut old = MinecraftServerStatus { phase: Phase::Error, ..Default::default() };
+        on_failure(&mut old, Some(1), &at(0), REASON_RECONCILE_FAILED, "connect to 10.0.0.1:443 failed");
+        old.message = Some("connect to 10.0.0.1:443 failed".into());
+        let mut new = old.clone();
+        on_failure(&mut new, Some(1), &at(60), REASON_RECONCILE_FAILED, "connect to 10.0.0.2:443 failed");
+        new.message = Some("connect to 10.0.0.2:443 failed".into());
+        assert!(only_messages_differ(Some(&old), &new));
+        assert!(!only_messages_differ(Some(&old), &old));
+        assert!(!only_messages_differ(None, &new));
+        let mut other = new.clone();
+        other.phase = Phase::Running;
+        assert!(!only_messages_differ(Some(&old), &other));
     }
 
     fn observed() -> Observed<'static> {

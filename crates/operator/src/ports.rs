@@ -16,19 +16,51 @@ pub type Used = HashMap<(u16, cubeharbor_core::crd::Protocol), String>;
 /// Allocations this process wrote that the watch cache may not show yet, by server UID. Reading
 /// the cache instead of LISTing per reconcile would otherwise let two servers reconciled in a row
 /// take the same port. Only the leader allocates, so nothing else can make an entry wrong.
-pub type Ledger = HashMap<String, Vec<PortAllocation>>;
+pub type Ledger = HashMap<String, Written>;
+
+/// One server's allocations as last written by this process.
+#[derive(Clone, Debug)]
+pub struct Written {
+    pub allocations: Vec<PortAllocation>,
+    pub at: std::time::Instant,
+}
+
+impl Written {
+    pub fn now(allocations: Vec<PortAllocation>) -> Self {
+        Self { allocations, at: std::time::Instant::now() }
+    }
+}
+
+/// How long an entry outlives its server's absence from the cache. With a watch namespace the
+/// cluster-wide cache is a separate watch that can lag behind the one that triggered the
+/// reconcile, so "not in the cache" may mean "not in the cache yet". It also keeps a deleted
+/// server's ports reserved this long.
+pub const ABSENT_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// A server's allocations: what was just written, else what the cache has.
 pub fn allocations_of<'a>(ledger: &'a Ledger, server: &'a MinecraftServer) -> &'a [PortAllocation] {
     let cached = || server.status.as_ref().map(|s| s.allocations.as_slice()).unwrap_or_default();
-    server.uid().and_then(|uid| ledger.get(&uid)).map_or_else(cached, Vec::as_slice)
+    server.uid().and_then(|uid| ledger.get(&uid)).map_or_else(cached, |w| w.allocations.as_slice())
 }
 
-/// Forget entries the cache has caught up with, and those of servers that are gone.
+/// Forget entries the cache has caught up with, and those of servers gone for `ABSENT_GRACE`.
 pub fn settle(ledger: &mut Ledger, servers: &[std::sync::Arc<MinecraftServer>]) {
-    ledger.retain(|uid, written| {
-        servers.iter().any(|s| s.uid().as_deref() == Some(uid.as_str()) && s.status.as_ref().map(|st| &st.allocations) != Some(&*written))
+    ledger.retain(|uid, written| match servers.iter().find(|s| s.uid().as_deref() == Some(uid.as_str())) {
+        Some(s) => s.status.as_ref().map(|st| &st.allocations) != Some(&written.allocations),
+        None => written.at.elapsed() < ABSENT_GRACE,
     });
+}
+
+/// Ports held by ledger entries of servers the cache doesn't show (yet), except `own_uid`'s.
+pub fn absent_from_cache<'a>(
+    ledger: &'a Ledger,
+    servers: &'a [std::sync::Arc<MinecraftServer>],
+    own_uid: Option<&'a str>,
+) -> impl Iterator<Item = (&'a str, &'a PortAllocation)> + 'a {
+    ledger
+        .iter()
+        .filter(move |(uid, _)| Some(uid.as_str()) != own_uid && !servers.iter().any(|s| s.uid().as_deref() == Some(uid.as_str())))
+        .flat_map(|(uid, w)| w.allocations.iter().map(move |a| (uid.as_str(), a)))
 }
 
 /// Allocate ports for `requests`, keeping existing allocations when they still match.
@@ -102,7 +134,7 @@ mod tests {
             s.status = port.map(|p| MinecraftServerStatus { allocations: vec![alloc(p)], ..Default::default() });
             Arc::new(s)
         };
-        let mut ledger = Ledger::from([("u1".to_string(), vec![alloc(25600)])]);
+        let mut ledger = Ledger::from([("u1".to_string(), Written::now(vec![alloc(25600)]))]);
 
         // The cache is behind: the entry wins and stays.
         let behind = vec![server("u1", None)];
@@ -114,9 +146,18 @@ mod tests {
         settle(&mut ledger, &[server("u1", Some(25600))]);
         assert!(ledger.is_empty());
 
-        // A deleted server's ports are free again.
-        let mut ledger = Ledger::from([("gone".to_string(), vec![alloc(25600)])]);
-        settle(&mut ledger, &[server("u1", None)]);
+        // A server missing from the cache keeps its entry for a while: the cache may just lag.
+        let mut ledger = Ledger::from([("new".to_string(), Written::now(vec![alloc(25600)]))]);
+        let others = vec![server("u1", None)];
+        settle(&mut ledger, &others);
+        assert_eq!(ledger.len(), 1);
+        let held: Vec<_> = absent_from_cache(&ledger, &others, Some("u1")).map(|(uid, a)| (uid, a.public_port)).collect();
+        assert_eq!(held, [("new", 25600)]);
+        assert_eq!(absent_from_cache(&ledger, &others, Some("new")).count(), 0);
+
+        // ...and after the grace period a deleted server's ports are free again.
+        ledger.get_mut("new").unwrap().at -= ABSENT_GRACE;
+        settle(&mut ledger, &others);
         assert!(ledger.is_empty());
     }
 

@@ -40,6 +40,24 @@ pub struct Ctx {
     pub gateway_sync: Notify,
     pub stats: Arc<crate::metrics::Stats>,
     pub recorder: Recorder,
+    /// When a failed reconcile last wrote each server's status, by UID.
+    pub failure_writes: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+}
+
+/// Minimum spacing of status writes that only reword a failure message (the failure requeue).
+const FAILURE_REWRITE_INTERVAL: Duration = Duration::from_secs(55);
+
+impl Ctx {
+    fn recently_wrote_failure(&self, uid: &str) -> bool {
+        let writes = self.failure_writes.lock().unwrap_or_else(|e| e.into_inner());
+        writes.get(uid).is_some_and(|t| t.elapsed() < FAILURE_REWRITE_INTERVAL)
+    }
+
+    fn wrote_failure(&self, uid: String) {
+        let mut writes = self.failure_writes.lock().unwrap_or_else(|e| e.into_inner());
+        writes.retain(|_, t| t.elapsed() < FAILURE_REWRITE_INTERVAL);
+        writes.insert(uid, std::time::Instant::now());
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -93,7 +111,15 @@ pub async fn reconcile(mcs: Arc<MinecraftServer>, ctx: Arc<Ctx>) -> Result<Actio
                 None => (server_conditions::REASON_RECONCILE_FAILED, Action::requeue(Duration::from_secs(60))),
             };
             server_conditions::on_failure(&mut status, mcs.metadata.generation, &conditions::now(), reason, &message);
-            write_status(&api, &name, previous.as_ref(), &status).await?;
+            // A reworded message alone is written at most once per retry interval; otherwise a
+            // message that changes per attempt would retry on every echo of its own write.
+            let uid = mcs.uid().unwrap_or_default();
+            let reworded = server_conditions::only_messages_differ(previous.as_ref(), &status);
+            let quiet = reworded && ctx.recently_wrote_failure(&uid);
+            if !quiet {
+                write_status(&api, &name, previous.as_ref(), &status).await?;
+                ctx.wrote_failure(uid);
+            }
             action
         }
     };
@@ -151,7 +177,10 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(120);
 /// This server's port allocations as last persisted. The object handed to the reconciler can be
 /// older than the allocation this operator just wrote; allocating from that stale copy could move
 /// the server to a different port.
-fn own_allocations(servers: &[Arc<MinecraftServer>], ledger: &ports::Ledger, ns: &str, name: &str, cached: &[PortAllocation]) -> Vec<PortAllocation> {
+fn own_allocations(servers: &[Arc<MinecraftServer>], ledger: &ports::Ledger, uid: Option<&str>, ns: &str, name: &str, cached: &[PortAllocation]) -> Vec<PortAllocation> {
+    if let Some(w) = uid.and_then(|u| ledger.get(u)) {
+        return w.allocations.clone();
+    }
     servers
         .iter()
         .find(|s| s.namespace().as_deref() == Some(ns) && s.name_any() == name)
@@ -333,7 +362,8 @@ impl Run<'_> {
             routing.conflict = Some(conflicts.message());
         }
 
-        let current = own_allocations(&servers, &ledger, ns, name, &status.allocations);
+        let uid = mcs.uid();
+        let current = own_allocations(&servers, &ledger, uid.as_deref(), ns, name, &status.allocations);
         let mut used = Used::new();
         for other in &servers {
             if other.namespace().as_deref() == Some(ns) && other.name_any() == name {
@@ -344,14 +374,18 @@ impl Run<'_> {
                 used.insert((a.public_port, a.protocol), owner.clone());
             }
         }
+        // Written by this process for servers the cache doesn't show yet (or any more).
+        for (owner, a) in ports::absent_from_cache(&ledger, &servers, uid.as_deref()) {
+            used.entry((a.public_port, a.protocol)).or_insert_with(|| format!("server {owner}"));
+        }
         status.allocations = ports::allocate(name, &mcs.spec.port_requests(), &current, &used, ctx.cfg.port_range())?;
         if status.allocations != current {
             // Persist right away, under the lock, so concurrent reconciles see the allocation.
             self.api::<MinecraftServer>()
                 .patch_status(name, &PatchParams::default(), &Patch::Merge(json!({ "status": { "allocations": status.allocations } })))
                 .await?;
-            if let Some(uid) = mcs.uid() {
-                ledger.insert(uid, status.allocations.clone());
+            if let Some(uid) = uid {
+                ledger.insert(uid, ports::Written::now(status.allocations.clone()));
             }
         }
         Ok(routing)
@@ -742,13 +776,16 @@ mod tests {
         let listed = vec![server("mc", "lobby", 25601), server("mc", "atm", 25602), server("other", "atm", 25603)];
         let mut ledger = ports::Ledger::new();
         // The object handed to the reconcile has no allocation yet; the fleet has 25602.
-        assert_eq!(own_allocations(&listed, &ledger, "mc", "atm", &[]), vec![alloc(25602)]);
-        assert_eq!(own_allocations(&listed, &ledger, "other", "atm", &[]), vec![alloc(25603)]);
+        assert_eq!(own_allocations(&listed, &ledger, Some("mc-atm"), "mc", "atm", &[]), vec![alloc(25602)]);
+        assert_eq!(own_allocations(&listed, &ledger, Some("other-atm"), "other", "atm", &[]), vec![alloc(25603)]);
         // Just written, not yet seen by the cache.
-        ledger.insert("mc-atm".into(), vec![alloc(25610)]);
-        assert_eq!(own_allocations(&listed, &ledger, "mc", "atm", &[]), vec![alloc(25610)]);
-        // Not in the fleet (yet): fall back to the cached status.
-        assert_eq!(own_allocations(&listed, &ledger, "mc", "new", &[alloc(25604)]), vec![alloc(25604)]);
+        ledger.insert("mc-atm".into(), ports::Written::now(vec![alloc(25610)]));
+        assert_eq!(own_allocations(&listed, &ledger, Some("mc-atm"), "mc", "atm", &[]), vec![alloc(25610)]);
+        // Not in the fleet (yet): fall back to the cached status...
+        assert_eq!(own_allocations(&listed, &ledger, Some("mc-new"), "mc", "new", &[alloc(25604)]), vec![alloc(25604)]);
+        // ...unless this process already wrote its allocation.
+        ledger.insert("mc-new".into(), ports::Written::now(vec![alloc(25611)]));
+        assert_eq!(own_allocations(&listed, &ledger, Some("mc-new"), "mc", "new", &[alloc(25604)]), vec![alloc(25611)]);
     }
 
     #[test]
