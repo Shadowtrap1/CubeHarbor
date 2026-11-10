@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
         alloc_lock: Mutex::new(()),
         gateway_sync: Notify::new(),
         stats: stats.clone(),
+        rollouts: Default::default(),
     });
 
     // Gateway ports: debounce reconcile notifications, plus a periodic sweep that catches deletions.

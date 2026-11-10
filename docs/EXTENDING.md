@@ -32,7 +32,8 @@ Where to make the common changes, and what limits to keep in mind. Start with
    If it affects version resolution, add it to the `resolve_hash` tuple in `reconcile.rs`.
 4. Prefer `Option<T>` with no default. A `#[serde(default = ...)]` value ends up in the CRD schema, so
    the API server stores it on every object and "unset" is lost for good. That's why
-   `merge_template` has to treat `resources.memory: 4Gi` as unset.
+   `resources.memory` and `storage` are `Option`s read through `memory()` and `storage()`, which
+   supply the built-in default.
 5. `make crd` and commit the result (CI compares it). For a new template field, the same command
    also regenerates `minecraftservertemplates.yaml`. Existing installs must re-apply the CRDs, or
    the API server silently drops the new field.
@@ -82,5 +83,5 @@ on a large cluster yet.
 | Gateway per-port tasks | The gateway binds a forwarder per allocation; UDP flows are tracked per client | Scale out with `gateway.replicas` |
 | Dashboard lists on each request | The server list calls the API server every time and has no cache | Add a reflector like the gateway's |
 | One pod per server | Worlds are single-writer PVCs, so a server can't scale out | Proxy fleets (see [ROADMAP](ROADMAP.md)) |
-| Template fan-out | An edit restarts every affected server within a minute, with no throttle | Staged rollouts (see [ROADMAP](ROADMAP.md)) |
+| Template fan-out | Running servers restart `TEMPLATE_ROLLOUT_MAX_UNAVAILABLE` (default 1) at a time per template, but a waiting server also defers its other reconcile work (players, auto-sleep) until its turn | Snapshot the merged spec so waiting servers keep reconciling on the old revision (see [ROADMAP](ROADMAP.md)) |
 | Template reads | One `get` per templated server per reconcile, no cache | Watch templates once the fleet is large |

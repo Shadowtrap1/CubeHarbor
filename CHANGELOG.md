@@ -10,7 +10,9 @@ All notable changes are listed here. The format follows
 
 * Server templates: a new `MinecraftServerTemplate` CRD holds shared settings that a
   `MinecraftServer` inherits with `spec.templateRef`; settings on the server win. Edits reach
-  servers within about a minute and restart only those whose merged settings change. Existing
+  servers within about a minute and restart only those whose merged settings change, one running
+  server at a time per template (`TEMPLATE_ROLLOUT_MAX_UNAVAILABLE` on the operator); a server that
+  doesn't come back up halts the rollout. Existing
   servers are unaffected. Apply the chart's CRDs (`kubectl apply --server-side -f
   charts/cubeharbor/crds/`) to use them. The operator gets `get` on the new resource. See
   "Server templates" in the README.
@@ -110,6 +112,11 @@ All notable changes are listed here. The format follows
   pointing at a missing image. Releases now wait for it.
 
 ### Changed
+
+* CRD: `spec.resources.memory` and `spec.resources.storage` no longer have a schema default, so a
+  server that leaves them out inherits them from its template, and one that writes them (even
+  `4Gi`/`20Gi`) keeps them. Without a template the defaults are unchanged. Existing objects keep
+  the values the API server stored. Re-apply the CRDs on upgrade.
 
 * Operator: **leader election**, so `operator.replicas` can be 2 or more (the chart no longer
   refuses it). Only the replica holding the `<release>-operator` Lease reconciles; a standby takes

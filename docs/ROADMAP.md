@@ -54,10 +54,11 @@ a backup first.
 
 ## 4. Staged template rollouts
 
-A template edit restarts every affected server at once today. Add
-`rollout: { maxUnavailable, waitForEmpty, window }` on the template. The merged result would be
-snapshotted so a server can stay on the previous revision until its turn, and `status.template` gains
-`pending`. Add a template watch here too, so edits start in seconds rather than up to a minute.
+The operator already restarts running servers one template slot at a time
+(`TEMPLATE_ROLLOUT_MAX_UNAVAILABLE`), but a waiting server skips its whole reconcile until its turn.
+Add `rollout: { maxUnavailable, waitForEmpty, window }` on the template, and snapshot the merged
+result so a waiting server keeps reconciling on the previous revision. Add a template watch here
+too, so edits start in seconds rather than up to a minute.
 
 ## 5. Per-server metrics and TPS
 

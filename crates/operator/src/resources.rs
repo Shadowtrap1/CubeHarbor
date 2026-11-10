@@ -223,7 +223,7 @@ pub fn statefulset(mcs: &MinecraftServer, inp: PodInputs<'_>) -> Result<Stateful
     let name = mcs.name_any();
     let spec = &mcs.spec;
     let cfg = inp.cfg;
-    let mem = &spec.resources.memory;
+    let mem = spec.resources.memory();
 
     // Shared by both containers. Secrets and the cache path are added for the installer only:
     // the server container runs third-party mod code, which must not see the CurseForge key.
@@ -310,7 +310,7 @@ pub fn statefulset(mcs: &MinecraftServer, inp: PodInputs<'_>) -> Result<Stateful
     let claims = inp.existing_claims.unwrap_or_else(|| {
         let mut pvc_spec = json!({
             "accessModes": ["ReadWriteOnce"],
-            "resources": { "requests": { "storage": spec.resources.storage } },
+            "resources": { "requests": { "storage": spec.resources.storage() } },
         });
         if let Some(sc) = spec.resources.storage_class.clone().or(cfg.default_storage_class.clone()) {
             pvc_spec["storageClassName"] = json!(sc);

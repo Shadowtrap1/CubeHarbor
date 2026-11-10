@@ -415,9 +415,10 @@ The server's own settings always win:
 * A server with its own `modpack` doesn't inherit `version`, `loader` or `loaderVersion`, so the
   pack decides them.
 * An empty list or map on a server can't clear what the template sets.
-* The API server stores `resources.memory: 4Gi` and `storage: 20Gi` when a server leaves them out,
-  so those exact values count as "not set". To really use 4Gi under a template with a different
-  memory, write `4096Mi`.
+* `resources.memory` and `resources.storage` default to 4Gi and 20Gi only when neither the server
+  nor its template sets them, and a value written on the server always wins, even `4Gi`. Servers
+  created before templates existed had those defaults stored by the API server; remove them from
+  such a server's spec to let its template decide.
 * The dashboard shows the server's own memory, loader and features, not the template's.
   `kubectl get mcs` and `status.resolved` show the version and loader in use; `status.template`
   shows which template revision was applied.
@@ -425,10 +426,14 @@ The server's own settings always win:
 **Rolling out a template change.** The operator re-reads the template each time it reconciles a
 server, so an edit reaches every server that uses it within about a minute. Servers whose merged
 settings don't change are left alone. For the others, a change that affects the install or the pod
-restarts them right away, players included, all at once. Sleeping and stopped servers pick the
-change up on their next start. `status.template`
-records the applied `generation`. To go gradually, copy the template under a new name
-(`paper-survival-v2`) and move servers over one at a time. `resources.storage` and `storageClass` only
+restarts them one at a time: a running server picks up the new revision only while fewer than
+`TEMPLATE_ROLLOUT_MAX_UNAVAILABLE` (operator environment, default 1) of the template's servers are
+still restarting from it, and the rest keep running unchanged with the status message "waiting to
+apply MinecraftServerTemplate ...". A restarted server counts until its pod is ready again, so a
+revision that breaks the first server stops there; fix or revert the template to continue.
+Sleeping, stopped and still-starting servers, and servers whose own spec was just edited, apply the
+change right away. `status.template` records the applied `generation` and `rolling` while a server
+holds a slot. `resources.storage` and `storageClass` only
 apply when a server's volume is first created.
 
 If a referenced template is missing or invalid, the server's status message says so and its

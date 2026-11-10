@@ -29,6 +29,14 @@ pub struct AppliedTemplate {
     /// `metadata.generation` of the template.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<i64>,
+    /// Hash of the merged spec the server's objects were built from, so a template edit that
+    /// doesn't change this server's result doesn't count as a rollout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_hash: Option<String>,
+    /// A template change restarted this server and it isn't back up yet. While set, the server
+    /// holds one of the template's rollout slots.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rolling: bool,
 }
 
 /// Settings shared by the servers that reference this template. The fields mean the same as on
@@ -167,17 +175,6 @@ fn merge_keyed<T: Clone, K: PartialEq>(own: &[T], template: &[T], key: impl Fn(&
     out
 }
 
-/// The API server fills in `resources.memory` and `resources.storage` on every stored
-/// `MinecraftServer`, so "not set" can't be told apart from the default: a value equal to the
-/// built-in default counts as not set. A server that really wants that amount under a template
-/// with a different one spells it differently (`4096Mi` instead of `4Gi`).
-fn pick_defaulted(own: &str, default: &str, template: &Option<String>) -> String {
-    match template {
-        Some(t) if own == default => t.clone(),
-        _ => own.to_string(),
-    }
-}
-
 /// The spec a server runs with: `server`, with anything it leaves unset taken from `template`.
 ///
 /// * Single values and whole objects (`modpack`, `voice`, `geyser`, `autoSleep`, `affinity`): the
@@ -229,10 +226,10 @@ pub fn merge_template(server: &MinecraftServerSpec, template: &MinecraftServerTe
         modpack: pick(&server.modpack, modpack),
         mods: merge_keyed(&server.mods, mods, |m| (m.modrinth.clone(), m.url.clone())),
         resources: ServerResources {
-            memory: pick_defaulted(&server.resources.memory, crate::defaults::MEMORY, &resources.memory),
+            memory: pick(&server.resources.memory, &resources.memory),
             cpu: pick(&server.resources.cpu, &resources.cpu),
             cpu_limit: pick(&server.resources.cpu_limit, &resources.cpu_limit),
-            storage: pick_defaulted(&server.resources.storage, crate::defaults::STORAGE, &resources.storage),
+            storage: pick(&server.resources.storage, &resources.storage),
             storage_class: pick(&server.resources.storage_class, &resources.storage_class),
         },
         jvm: JvmSpec {
@@ -312,17 +309,27 @@ mod tests {
     }
 
     #[test]
-    fn memory_and_storage_at_the_built_in_default_count_as_unset() {
+    fn explicit_memory_and_storage_win_even_at_the_built_in_default() {
         let t = template(json!({ "resources": { "memory": "8Gi", "storage": "40Gi" } }));
-        // What the API server stores for a server that sets neither.
-        let defaulted = server(json!({ "resources": { "memory": crate::defaults::MEMORY, "storage": crate::defaults::STORAGE } }));
-        let m = merge_template(&defaulted, &t);
-        assert_eq!((m.resources.memory.as_str(), m.resources.storage.as_str()), ("8Gi", "40Gi"));
-        let m = merge_template(&server(json!({ "resources": { "memory": "2Gi", "storage": "5Gi" } })), &t);
-        assert_eq!((m.resources.memory.as_str(), m.resources.storage.as_str()), ("2Gi", "5Gi"));
-        // With nothing in the template the default stays.
-        let m = merge_template(&defaulted, &Default::default());
-        assert_eq!(m.resources.memory, crate::defaults::MEMORY);
+        let m = merge_template(&server(json!({})), &t);
+        assert_eq!((m.resources.memory(), m.resources.storage()), ("8Gi", "40Gi"));
+        // Exactly the default, spelled out: the server asked for it, so it wins.
+        let explicit = server(json!({ "resources": { "memory": crate::defaults::MEMORY, "storage": crate::defaults::STORAGE } }));
+        let m = merge_template(&explicit, &t);
+        assert_eq!((m.resources.memory(), m.resources.storage()), (crate::defaults::MEMORY, crate::defaults::STORAGE));
+        // With nothing set anywhere the built-in default applies.
+        let m = merge_template(&server(json!({})), &Default::default());
+        assert_eq!((m.resources.memory.as_deref(), m.resources.memory()), (None, crate::defaults::MEMORY));
+    }
+
+    /// Objects stored before the schema default was dropped carry `4Gi`/`20Gi` explicitly; they
+    /// still parse, and keep exactly those values.
+    #[test]
+    fn previously_defaulted_objects_keep_their_values() {
+        let old = server(json!({ "resources": { "memory": "4Gi", "storage": "20Gi" } }));
+        assert_eq!((old.resources.memory(), old.resources.storage()), ("4Gi", "20Gi"));
+        let v = serde_json::to_value(&old).unwrap();
+        assert_eq!(v["resources"], json!({ "memory": "4Gi", "storage": "20Gi" }));
     }
 
     #[test]
