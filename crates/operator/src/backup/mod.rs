@@ -354,6 +354,14 @@ async fn reconcile_backup(
         return observe_backup_job(&ctx, &backup, &job, &status).await;
     }
     if status.phase == JobPhase::Running {
+        // Deleted, or cleaned up by its TTL while the operator was down: nothing says whether it
+        // turned saves back on, so make sure.
+        if status.mode.as_deref() == Some("online")
+            && let Some(server) = servers.get_opt(&backup.spec.server).await?
+        {
+            recover_saves(&ctx, &backup, &server).await.context("creating the save-on Job")?;
+        }
+        release_lock(&servers, &backup.spec.server, &owner).await?;
         patch_backup_status(&api, &name, &fail("the backup Job disappeared".into())).await?;
         return Ok(Action::await_change());
     }
@@ -585,7 +593,7 @@ async fn observe_backup_job(
         );
         // An online backup that died uncleanly may have left autosave off, which loses progress
         // silently, so turn it back on from a fresh pod.
-        if status.mode.as_deref() == Some("online")
+        if (status.mode.as_deref() == Some("online") || job::pauses_saves(job))
             && !report.as_ref().is_some_and(|r| r.saves_restored)
             && let Some(server) = servers.get_opt(&backup.spec.server).await?
         {

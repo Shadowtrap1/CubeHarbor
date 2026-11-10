@@ -23,6 +23,17 @@ pub const BACKUP_OF_LABEL: &str = "cubeharbor.dev/backup-of";
 /// On a backup Job: JSON list of the `MinecraftBackup` names to delete once it succeeds.
 pub const PRUNE_ANNOTATION: &str = "cubeharbor.dev/prune-backups";
 const DEFAULT_TIMEOUT_SECONDS: u32 = 6 * 60 * 60;
+/// Pod retries of a `save-on` Job: about ten minutes of backoff in all.
+const SAVE_ON_RETRIES: i32 = 6;
+
+/// Did this backup Job pause saves over RCON (an online backup)? Read from the Job itself, so it
+/// holds even when the operator stopped before recording the mode in the backup's status.
+pub fn pauses_saves(job: &Job) -> bool {
+    job.spec
+        .as_ref()
+        .and_then(|s| s.template.spec.as_ref())
+        .is_some_and(|p| p.containers.iter().flat_map(|c| c.env.iter().flatten()).any(|e| e.name == env::RCON_ADDR))
+}
 /// Java version of the image the tool runs in; it doesn't use Java.
 const TOOL_IMAGE_JAVA: u8 = 21;
 const DATA_MOUNT: &str = defaults::DATA_DIR;
@@ -186,7 +197,9 @@ pub fn build(inp: JobInputs<'_>) -> Result<Job> {
             "ownerReferences": [inp.owner],
         },
         "spec": {
-            "backoffLimit": 0,
+            // Backups and restores are not retried blindly; `save-on` is, since autosave left off
+            // silently loses progress (Kubernetes backs off 10s, 20s, 40s, ... between pods).
+            "backoffLimit": if inp.action == Action::SaveOn { SAVE_ON_RETRIES } else { 0 },
             "activeDeadlineSeconds": inp.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS),
             "ttlSecondsAfterFinished": cfg.backup_job_ttl_seconds,
             "template": { "metadata": { "labels": pod_labels }, "spec": pod },
@@ -390,6 +403,17 @@ mod tests {
             assert_eq!(e["valueFrom"]["secretKeyRef"]["name"], "creds");
             assert!(e.get("value").is_none());
         }
+    }
+
+    #[test]
+    fn only_save_on_is_retried_and_online_backups_are_recognised() {
+        let s = pvc();
+        let online = job(Action::Backup, true, Some(&s));
+        assert_eq!(online["spec"]["backoffLimit"], 0);
+        assert_eq!(job(Action::SaveOn, true, None)["spec"]["backoffLimit"], SAVE_ON_RETRIES);
+        let typed = |v: Value| serde_json::from_value::<Job>(v).unwrap();
+        assert!(pauses_saves(&typed(online)));
+        assert!(!pauses_saves(&typed(job(Action::Backup, false, Some(&s)))));
     }
 
     #[test]
