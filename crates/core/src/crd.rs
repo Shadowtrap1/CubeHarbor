@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::{CustomResource, KubeSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -30,11 +31,14 @@ pub const GEYSER_PORT: u16 = 19132;
     status = "MinecraftServerStatus",
     shortname = "mcs",
     printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#,
+    printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#,
     printcolumn = r#"{"name":"Version","type":"string","jsonPath":".status.resolved.minecraftVersion"}"#,
     printcolumn = r#"{"name":"Loader","type":"string","jsonPath":".status.resolved.loader"}"#,
     printcolumn = r#"{"name":"Players","type":"integer","jsonPath":".status.players.online"}"#,
     printcolumn = r#"{"name":"Address","type":"string","jsonPath":".status.hostnames[0]"}"#,
-    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#,
+    printcolumn = r#"{"name":"Reconciled","type":"string","priority":1,"jsonPath":".status.conditions[?(@.type==\"Reconciled\")].status"}"#,
+    printcolumn = r#"{"name":"Message","type":"string","priority":1,"jsonPath":".status.message"}"#
 )]
 #[serde(rename_all = "camelCase")]
 pub struct MinecraftServerSpec {
@@ -473,6 +477,10 @@ pub struct MinecraftServerStatus {
     /// Stopped by auto-sleep; the gateway clears this when a player joins.
     #[serde(default)]
     pub sleeping: bool,
+    /// `Reconciled`, `Installed`, `Routable` and `Ready`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))]
+    pub conditions: Vec<Condition>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, JsonSchema, PartialEq, Eq)]

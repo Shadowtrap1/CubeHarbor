@@ -8,6 +8,15 @@ All notable changes are listed here. The format follows
 
 ### Added
 
+* Operator: `status.conditions` (`Reconciled`, `Installed`, `Routable`, `Ready`) on every
+  MinecraftServer, so `kubectl wait --for=condition=Ready mcs/<name>` works, and Kubernetes Events
+  for transitions and reconcile failures (once per change, visible in `kubectl describe`). `kubectl
+  get mcs` gains a Ready column, and `-o wide` Reconciled and Message. A spec the operator refuses
+  (bad ports, a disallowed image or ingress host, an empty modpack) now reports `Reconciled=False`
+  with reason `InvalidSpec` and waits for the object to change instead of retrying every minute.
+  The status is no longer written when nothing changed. **Re-apply the chart's CRD**
+  (`kubectl apply -f charts/cubeharbor/crds/`), which Helm doesn't upgrade; until then the API
+  server prunes the conditions and the new columns are missing.
 * Chart: `metrics.enabled` adds ClusterIP Services for the gateway's and the operator's
   `/metrics` (never on the public gateway Service), and `metrics.serviceMonitor.enabled` a
   Prometheus Operator ServiceMonitor for them (`labels`, `interval`, `namespace`). Both off by
@@ -103,6 +112,10 @@ All notable changes are listed here. The format follows
 
 ### Changed
 
+* Operator: built for hundreds of servers. Reconciles read a watch cache instead of LISTing every
+  MinecraftServer each time, at most `MAX_CONCURRENT_RECONCILES` (16, settable through
+  `operator.extraEnv`) run at once, and the gateway ports Service is only written when it changes
+  (plus a repair every 30 seconds).
 * Operator: **leader election**, so `operator.replicas` can be 2 or more (the chart no longer
   refuses it). Only the replica holding the `<release>-operator` Lease reconciles; a standby takes
   over within ~15 seconds if it dies, or immediately when it shuts down (it releases the Lease
