@@ -121,6 +121,10 @@ All notable changes are listed here. The format follows
 * Operator: `/readyz` and Prometheus `/metrics` on the health port (8080): reconcile count,
   errors and time, gateway-ports sync errors, leader status, and (on the leader) servers by phase,
   players online and allocated ports. The chart adds a readiness probe.
+* **Breaking (dashboard API):** `POST /users/{name}/role` needs the admin's own password in a
+  `current` form field, like adding a user or resetting a password; a request without it is
+  refused (`422`; `401` for a wrong password) and the role stays. The Users page sends it;
+  scripts must add it.
 * **Breaking (chart):** the new `values.schema.json` rejects values files that Helm used to
   accept silently: unknown top-level keys (left over from an old version, or misspelled), wrong
   types (e.g. a number where a string is expected) and values outside the listed choices. Run
@@ -209,7 +213,7 @@ All notable changes are listed here. The format follows
 * Dashboard: `spec.env` values are masked for viewers and operators (server page, `/api/servers`,
   compose exports), since they can hold credentials.
 * Dashboard: changing a user's role needs the admin's own password, like adding a user or
-  resetting a password. Scripts posting to `/users/{name}/role` must send `current`.
+  resetting a password (see **Breaking (dashboard API)** above).
 * Dashboard: the login form refuses cross-site posts, and concurrent password guesses count
   against the failed-login limit straight away instead of after hashing.
 * Dashboard: Kubernetes, RCON, remote-setup and modpack-search errors no longer reach clients
