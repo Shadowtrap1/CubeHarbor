@@ -1,0 +1,27 @@
+# Reports this host's docker compose Minecraft servers to the cubeharbor dashboard.
+# The dashboard reads http://<this host>:8765/api/servers through `dashboard.remotes`.
+# With AGENT_TOKEN (in .env next to this file) the dashboard can also follow each server's log
+# and send it console commands; the same token is in the cluster Secret the dashboard uses.
+# Any stack using itzg/minecraft-server is picked up on its own within ~10 seconds:
+# nothing has to be added to the other compose files.
+name: cubeharbor-agent
+services:
+  agent:
+    image: python:3.13-alpine
+    command: ["python", "-u", "/agent.py"]
+    restart: unless-stopped
+    user: "65534:983"              # nobody, plus the docker group: use the number from `getent group docker`
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 64m
+    environment:
+      PUBLIC_HOST: "192.168.1.20"  # address players use for this machine
+      TOKEN: "${AGENT_TOKEN:-}"     # empty: list only, no logs or commands
+    ports:
+      - "8765:8765"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - "./agent.py:/agent.py:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"

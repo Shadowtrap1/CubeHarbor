@@ -76,6 +76,7 @@ pub fn required_role(method: &Method, path: &str) -> Role {
         (false, ["logout"]) | (false, ["account", ..]) => Role::Viewer,
         (false, ["servers", _, _, "action", "start" | "stop" | "restart"]) => Role::Operator,
         (false, ["servers", _, _, "console"]) => Role::Operator,
+        (false, ["remotes", _, _, "console"]) => Role::Operator,
         (false, _) => Role::Admin,
         (true, _) => Role::Viewer,
     }
@@ -457,7 +458,8 @@ mod tests {
         let post = |p: &str| required_role(&Method::POST, p);
         // Reading.
         for p in ["/", "/fragments/servers", "/servers/mc/a", "/servers/mc/a/logs", "/servers/mc/a/compose.yaml", "/compose/export",
-            "/account", "/api/servers", "/api/v1/servers", "/api/v1/compose", "/api/v1/servers/mc/a/compose", "/api/modpacks/search"] {
+            "/account", "/api/servers", "/api/v1/servers", "/api/v1/compose", "/api/v1/servers/mc/a/compose", "/api/modpacks/search",
+            "/remotes/yoru/a", "/remotes/yoru/a/logs"] {
             assert_eq!(get(p), Viewer, "{p}");
         }
         assert_eq!(post("/logout"), Viewer);
@@ -469,6 +471,8 @@ mod tests {
             assert_eq!(post(&format!("/servers/mc/a/action/{a}")), Operator);
         }
         assert_eq!(post("/servers/mc/a/console"), Operator);
+        assert_eq!(post("/remotes/yoru/a/console"), Operator);
+        assert_eq!(post("/remotes/yoru/a/anything-else"), Admin);
         // Changing what runs, and users.
         for p in ["/servers/mc/a/action/delete", "/servers/mc/a/action/delete-data", "/servers/mc/a/action/other", "/servers/mc/a/spec",
             "/new/quick", "/compose/preview", "/compose/apply", "/api/compose", "/api/v1/compose", "/users", "/users/bob/role",

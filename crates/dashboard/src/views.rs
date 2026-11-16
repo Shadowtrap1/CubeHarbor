@@ -284,19 +284,67 @@ pub fn index(st: &AppState, me: &Identity, servers: &[MinecraftServer], remote: 
                 @if !rows.is_empty() {
                     table {
                         thead { tr { th { "Name" } th { "Status" } th { "Version" } th { "Players" } th { "Address" } } }
-                        tbody { @for r in rows { tr {
-                            td { b { (r.name) } }
+                        tbody { @for r in rows.iter() { tr {
+                            td { @if r.console { a href=(format!("/remotes/{}/{}", r.source, r.name)) { b { (r.name) } } } @else { b { (r.name) } } }
                             td { span class=(format!("badge {}", if r.online { "Running" } else { "Stopped" })) { (r.phase) } }
                             td { (r.version.clone().unwrap_or_else(|| "–".into())) @if let Some(l) = &r.loader { " · " (l) } }
                             td { @if let Some(p) = &r.players { (p.online) @if p.max > 0 { "/" (p.max) } } @else { span.muted { "–" } } }
                             td.mono { (r.address.clone().unwrap_or_default()) }
                         } } }
                     }
-                    p.muted { small { "Read-only: managed by its own setup. Recreate one here by importing its compose file." } }
+                    p.muted { small {
+                        @if rows.iter().any(|r| r.console) { "Managed by its own setup: open a server for its log and console. " }
+                        @else { "Read-only: managed by its own setup. " }
+                        "Recreate one here by importing its compose file."
+                    } }
                 }
             }
         }
         script { (PreEscaped(site::INDEX_JS)) }
+    })
+}
+
+/// A server of another setup that offers its log and console (`Summary::console`).
+pub fn remote_detail(me: &Identity, s: &Summary) -> Markup {
+    let base = format!("/remotes/{}/{}", s.source, s.name);
+    layout(&s.name, Some(me), html! {
+        .row style="justify-content:space-between" {
+            h1 { (s.name) " " span class=(format!("badge {}", if s.online { "Running" } else { "Stopped" })) { (s.phase) } }
+            span.muted { "Runs on " (s.source) ", outside cubeharbor: start, stop and settings stay with its own setup." }
+        }
+        @if let Some(m) = &s.message { p.muted { (m) } }
+        .grid {
+            .card { h2 style="margin-top:0" { "Connect" }
+                .kv { div { "Java" } div.mono { (s.address.clone().unwrap_or_else(|| "–".into())) } }
+            }
+            .card { h2 style="margin-top:0" { "Server" }
+                .kv {
+                    @if let Some(v) = &s.version { div { "Minecraft" } div { (v) } }
+                    @if let Some(l) = &s.loader { div { "Loader" } div { (l) } }
+                    @if let Some(m) = &s.modpack { div { "Modpack" } div { (m) } }
+                    @if let Some(m) = &s.memory { div { "Memory" } div { (m) } }
+                    div { "Players" } div { @if let Some(p) = &s.players { (p.online) @if p.max > 0 { "/" (p.max) } } @else { "–" } }
+                    @if let Some(p) = &s.project { div { "Project" } div { (p) } }
+                }
+            }
+        }
+        h2 { "Console" }
+        .card {
+            @if s.console {
+                .row style="margin-bottom:8px" { span.muted #logstate {} }
+                pre #log data-base=(base) data-initial="server" data-max-lines=(site::get().console.max_lines)
+                    data-offline=(format!("disconnected ({} unreachable?)", s.source)) data-ended="log ended (server stopped?): reload to reconnect" {}
+                @if me.can(Role::Operator) {
+                    form #console .row style="margin-top:8px" {
+                        input name="command" #cmd placeholder="say hello  (runs over RCON)" autocomplete="off" style="flex:1";
+                        button.primary type="submit" { "Send" }
+                    }
+                }
+            } @else {
+                p.muted { (s.source) " doesn't offer a log or console for this server." }
+            }
+        }
+        @if s.console { script { (PreEscaped(site::SERVER_JS)) } }
     })
 }
 

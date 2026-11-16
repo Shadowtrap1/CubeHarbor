@@ -8,6 +8,13 @@ All notable changes are listed here. The format follows
 
 ### Added
 
+* Dashboard: **log and console for docker compose servers on another machine.** A remote can
+  offer each server's log and console; `examples/docker-agent` is an agent that does, for every
+  `itzg/minecraft-server` container on its host, without changes to those compose stacks. Such
+  servers get a page (`/remotes/<remote>/<server>`) with the live container log for every user
+  and a console for operators and admins (commands run through `rcon-cli` in the container).
+  The remote's token comes from a Secret (`dashboard.remotes[].tokenSecret`) and is also sent
+  with the list request. See "Docker compose servers on another machine" in the README.
 * Optional Cloudflare DNS updates for home installs with a changing public IP
   (`cloudflareDdns.enabled`, off by default). The operator looks up its public IPv4 every
   `interval` (5m). When it changed, and once an hour to repair edits made in Cloudflare, it

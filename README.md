@@ -319,6 +319,50 @@ World data is not copied. Each warning names the old data folder and the new vol
 "Compose file" on a server page, "Export compose" for everything, or "Start from current
 servers" in the Compose tab to copy an existing server into a new one.
 
+## Docker compose servers on another machine
+
+Servers that keep running under docker compose can still show up on the dashboard, with their
+live log and a console, without changing their compose files.
+[`examples/docker-agent`](examples/docker-agent) is a small agent (one Python file, no
+dependencies) that you run as its own compose stack on that machine. It finds every container
+using `itzg/minecraft-server` through the Docker socket, pings it for status and players, and
+serves the list the dashboard reads as a remote.
+
+```sh
+# On the docker machine
+cp -r examples/docker-agent ~/cubeharbor-agent && cd ~/cubeharbor-agent
+echo "AGENT_TOKEN=$(openssl rand -hex 32)" > .env && chmod 600 .env
+# compose.yaml: set PUBLIC_HOST, and the docker group's number (`getent group docker`) in `user:`
+docker compose up -d
+
+# On the cluster: the same token in a Secret, and the remote in the values
+kubectl -n cubeharbor create secret generic cubeharbor-remote-nas --from-literal=token=<AGENT_TOKEN>
+```
+
+```yaml
+dashboard:
+  remotes:
+    - name: nas
+      url: http://192.168.1.20:8765/api/servers
+      tokenSecret: { name: cubeharbor-remote-nas, key: token }
+```
+
+The servers are listed under "Other setup: nas". Each opens a page with its log (the container's
+log, followed live) for every user, and a console for operators and admins: a command is run
+with `rcon-cli` inside the container. Start, stop and settings stay with docker compose.
+
+* Without `AGENT_TOKEN` (and `tokenSecret`) the agent only serves the list, and the servers
+  have no page.
+* The list itself needs no token: anyone who can reach port 8765 sees names, versions, MOTDs
+  and player counts. Logs and commands need the token.
+* The token crosses your network in plain HTTP, and whoever has it can run any command on
+  those servers (`op`, `stop`, ...). Keep the agent on a trusted LAN or behind a firewall rule
+  that only admits the cluster's nodes, or put a TLS proxy in front of it.
+* The agent can reach the whole Docker socket, which is root on that machine. It only lists and
+  inspects containers, reads logs and runs `rcon-cli`; it runs as `nobody` with a read-only
+  filesystem and no capabilities.
+* When the container stops, the log ends; reload the page once the server is back.
+
 ## API (for central dashboards)
 
 Create an API token on the dashboard's **Account** page and send it as
@@ -352,7 +396,8 @@ origins need `dashboard.corsOrigins`. `dashboard.publicServerList: true` makes t
 The top level (`updated`, `servers[].name/address/online`, `totals`) matches the
 games-dashboard `/api/servers` format, so one page can read either. A remote can be a
 games-dashboard, another cubeharbor (`/api/v1/servers`), or any URL that returns a JSON list of
-`{name, address, online, players, version}`.
+`{name, address, online, players, version}`. Servers of a remote that offers a console
+(the [docker agent](#docker-compose-servers-on-another-machine)) carry `links.dashboard`.
 
 ```sh
 curl -H "Authorization: Bearer $TOKEN" https://cubeharbor.example.com/api/v1/servers

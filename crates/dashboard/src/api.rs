@@ -6,6 +6,13 @@
 //! * `POST /api/v1/compose` applies a compose file (`?dry_run=true`, `?rehost=true`).
 //! * `GET  /api/v1/compose` exports every server (or `?project=`) as one compose file.
 //! * `GET  /api/v1/servers/{ns}/{name}/compose` exports one server.
+//!
+//! A remote may also offer each server's log and console (the cubeharbor docker agent does, see
+//! `examples/docker-agent`). It says so with `"console": true` on a server, and serves, next to
+//! its list URL and for callers sending the remote's token as `Authorization: Bearer`:
+//!
+//! * `GET  <list url>/<name>/logs?tail=N`: the log as plain text lines, followed live.
+//! * `POST <list url>/<name>/command`: body is one server command, the reply its output.
 
 use std::time::{Duration, Instant};
 
@@ -54,9 +61,12 @@ pub struct Summary {
     pub ports: Vec<PortSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// Dashboard page and compose export (cubeharbor servers only).
+    /// Dashboard page, and for cubeharbor servers the compose export.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub links: Option<Value>,
+    /// A remote server whose log and console this dashboard can reach (see [`remote_endpoint`]).
+    #[serde(skip)]
+    pub console: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -109,6 +119,7 @@ pub fn summarize(st: &AppState, s: &MinecraftServer) -> Summary {
             "dashboard": format!("/servers/{ns}/{name}"),
             "compose": format!("/api/v1/servers/{ns}/{name}/compose"),
         })),
+        console: false,
     }
 }
 
@@ -144,9 +155,10 @@ pub async fn remote_servers(st: &AppState) -> (Vec<Summary>, Vec<SourceStatus>) 
         return (c.servers.clone(), c.sources.clone());
     }
     let fetches = st.remotes.iter().map(|(name, url)| async move {
-        let r = tokio::time::timeout(REMOTE_TIMEOUT, st.http.get_json::<Value>(url)).await;
+        let has_token = st.remote_tokens.contains_key(name);
+        let r = tokio::time::timeout(REMOTE_TIMEOUT, fetch_remote(st, name, url)).await;
         let r = match r {
-            Ok(Ok(v)) => Ok(parse_remote(name, &v)),
+            Ok(Ok(v)) => Ok(parse_remote(name, &v, has_token)),
             Ok(Err(e)) => Err(format!("{e:#}")),
             Err(_) => Err(format!("{url}: timed out")),
         };
@@ -170,9 +182,42 @@ pub async fn remote_servers(st: &AppState) -> (Vec<Summary>, Vec<SourceStatus>) 
     (servers, sources)
 }
 
+/// A remote's server list. Its token, when it has one, is sent along.
+async fn fetch_remote(st: &AppState, name: &str, url: &str) -> anyhow::Result<Value> {
+    let mut req = st.http.client.get(url);
+    if let Some(token) = st.remote_tokens.get(name) {
+        req = req.bearer_auth(token);
+    }
+    let resp = req.send().await.map_err(|e| anyhow::anyhow!("GET {url}: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("GET {url}: HTTP {status}: {}", body.chars().take(300).collect::<String>());
+    }
+    resp.json().await.map_err(|e| anyhow::anyhow!("decoding {url}: {e}"))
+}
+
+/// Names that may be put into a URL path as they are.
+pub fn safe_name(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 100 && !s.starts_with('.') && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// URL and token of a remote server's `logs` or `command` endpoint: `<list url>/<name>/<what>`.
+/// None unless the remote is configured with a token and both names are plain.
+pub fn remote_endpoint(st: &AppState, source: &str, name: &str, what: &str) -> Option<(String, String)> {
+    let (_, url) = st.remotes.iter().find(|(n, _)| n == source)?;
+    let token = st.remote_tokens.get(source)?;
+    if !safe_name(source) || !safe_name(name) {
+        return None;
+    }
+    let base = url.split(['?', '#']).next().unwrap_or(url).trim_end_matches('/');
+    Some((format!("{base}/{name}/{what}"), token.clone()))
+}
+
 /// Accepts the games-dashboard format (`{servers: [{name, address, online, players, version}]}`),
-/// another cubeharbor's `/api/v1/servers`, or a bare array.
-pub fn parse_remote(source: &str, v: &Value) -> Vec<Summary> {
+/// another cubeharbor's `/api/v1/servers`, or a bare array. `has_token`: this dashboard has a
+/// token for the remote, so servers it marks `"console": true` get a page with log and console.
+pub fn parse_remote(source: &str, v: &Value, has_token: bool) -> Vec<Summary> {
     let list = v.get("servers").unwrap_or(v).as_array().cloned().unwrap_or_default();
     list.iter()
         .filter_map(|s| {
@@ -193,7 +238,13 @@ pub fn parse_remote(source: &str, v: &Value) -> Vec<Summary> {
                 _ => None,
             };
             let kind = str_of("type").filter(|t| t != "minecraft");
+            let console = has_token
+                && s.get("console").and_then(Value::as_bool).unwrap_or(false)
+                && safe_name(source)
+                && safe_name(&name);
             Some(Summary {
+                links: console.then(|| json!({ "dashboard": format!("/remotes/{source}/{name}") })),
+                console,
                 source: source.to_string(),
                 namespace: str_of("namespace"),
                 phase: str_of("phase").unwrap_or_else(|| if online { "Online".into() } else { "Offline".into() }),
@@ -386,14 +437,30 @@ mod tests {
                "totals":{"servers":2,"online":1,"players":3}}"#,
         )
         .unwrap();
-        let s = parse_remote("games", &v);
+        let s = parse_remote("games", &v, true);
         assert_eq!(s.len(), 2);
+        assert!(!s[1].console && s[1].links.is_none(), "no console unless the remote offers one");
         assert_eq!(s[0].phase, "Offline");
         assert!(s[1].online);
         assert_eq!(s[1].players.as_ref().unwrap().online, 3);
         assert_eq!(s[1].version.as_deref(), Some("1.21.1"));
         assert_eq!(s[1].source, "games");
         assert_eq!(s[0].loader, None);
+    }
+
+    #[test]
+    fn remote_console_needs_offer_token_and_plain_names() {
+        let v = json!({ "servers": [
+            { "name": "season4", "online": true, "console": true },
+            { "name": "../etc", "online": true, "console": true },
+            { "name": "plain", "online": true } ] });
+        let s = parse_remote("yoru", &v, true);
+        assert_eq!(s.iter().map(|s| s.console).collect::<Vec<_>>(), [true, false, false]);
+        assert_eq!(s[0].links.as_ref().unwrap()["dashboard"], "/remotes/yoru/season4");
+        // Without a token the dashboard couldn't use the console: no page either.
+        assert!(parse_remote("yoru", &v, false).iter().all(|s| !s.console && s.links.is_none()));
+        assert!(parse_remote("a/b", &v, true).iter().all(|s| !s.console));
+        assert!(safe_name("season4-mc_1.x") && !safe_name("") && !safe_name("..") && !safe_name("a b") && !safe_name("a%2f"));
     }
 
     #[test]

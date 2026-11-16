@@ -1,5 +1,6 @@
 // Server page: live logs over SSE and the RCON console.
-// Settings come from data attributes on #log: base URL, first log to show, max kept lines.
+// Settings come from data attributes on #log: base URL, first log to show, max kept lines, and
+// (servers of other setups) the texts for an unreachable source and a log that ended.
 const log = document.getElementById('log'), stateEl = document.getElementById('logstate');
 const base = log.dataset.base;
 const maxLines = Number(log.dataset.maxLines) || 4000;
@@ -11,7 +12,7 @@ function stream(c) {
   es = new EventSource(base + '/logs?container=' + c);
   stateEl.textContent = 'connecting…';
   es.onopen = () => stateEl.textContent = 'live';
-  es.onerror = () => stateEl.textContent = 'disconnected (pod not running?)';
+  es.onerror = () => stateEl.textContent = log.dataset.offline || 'disconnected (pod not running?)';
   const add = t => {
     const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
     log.append(t + '\n');
@@ -20,6 +21,8 @@ function stream(c) {
   };
   es.onmessage = e => add(e.data);
   es.addEventListener('error', e => { if (e.data) add(e.data); });
+  // Sent when a log that can't be followed any further is over: don't reconnect and replay it.
+  es.addEventListener('end', () => { es.close(); stateEl.textContent = log.dataset.ended || 'log ended'; });
 }
 
 document.querySelectorAll('[data-c]').forEach(b => b.onclick = () => {
