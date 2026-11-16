@@ -226,9 +226,15 @@ dashboard:
   cookieSecure: false
   # -- Other setups shown on the dashboard and in /api/v1/servers (read-only).
   # Each url returns a server list: games-dashboard /api/servers or another cubeharbor /api/v1/servers.
+  # A remote that offers its servers' log and console (the docker agent in examples/docker-agent,
+  # for docker compose servers on another machine) also needs its token, from a Secret you
+  # create: those servers then get a page with a live log and, for operators, a console.
   remotes: []
   #  - name: games
   #    url: https://games.example.com/api/servers
+  #  - name: nas
+  #    url: http://192.168.1.20:8765/api/servers
+  #    tokenSecret: { name: cubeharbor-remote-nas, key: token }
   # -- Browser origins allowed to call /api (central dashboards on another host). `*` allows any.
   corsOrigins: []
   # -- Serve GET /api/v1/servers without logging in (for public status pages).

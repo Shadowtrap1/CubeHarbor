@@ -181,6 +181,18 @@ spec:
             - { name: PUBLIC_MINECRAFT_PORT, value: {{ ternary .Values.mcRouter.service.port .Values.gateway.service.port (eq .Values.router.mode "mc-router") | quote }} }
             - name: REMOTES
               value: {{ include "cubeharbor.remotes" . | quote }}
+            {{- /* Tokens stay in their Secrets: Kubernetes expands $(REMOTE_TOKEN_n) below. */}}
+            {{- $remoteTokens := list }}
+            {{- range $i, $r := .Values.dashboard.remotes }}
+            {{- with $r.tokenSecret }}
+            - name: REMOTE_TOKEN_{{ $i }}
+              valueFrom: { secretKeyRef: { name: {{ required "dashboard.remotes[].tokenSecret.name is required" .name | quote }}, key: {{ .key | default "token" | quote }} } }
+            {{- $remoteTokens = append $remoteTokens (printf "%s=$(REMOTE_TOKEN_%d)" $r.name $i) }}
+            {{- end }}
+            {{- end }}
+            {{- if $remoteTokens }}
+            - { name: REMOTE_TOKENS, value: {{ join "," $remoteTokens | quote }} }
+            {{- end }}
             - { name: CORS_ORIGINS, value: {{ join "," .Values.dashboard.corsOrigins | quote }} }
             - { name: PUBLIC_SERVER_LIST, value: {{ .Values.dashboard.publicServerList | quote }} }
             - { name: TRUSTED_PROXIES, value: {{ join "," .Values.dashboard.trustedProxies | quote }} }

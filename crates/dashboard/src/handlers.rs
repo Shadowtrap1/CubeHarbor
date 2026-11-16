@@ -15,7 +15,7 @@ use cubeharbor_core::crd::{MinecraftServer, MinecraftServerSpec, RCON_PORT};
 use cubeharbor_core::labels;
 use cubeharbor_core::rcon::{Rcon, strip_formatting};
 use cubeharbor_core::sources::{curseforge, modrinth};
-use futures::{AsyncBufReadExt, Stream, StreamExt};
+use futures::{AsyncBufReadExt, Stream, StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Pod, Secret};
 use kube::api::{Api, DeleteParams, ListParams, LogParams, Patch, PatchParams, PostParams};
 use kube::ResourceExt;
@@ -373,6 +373,83 @@ fn async_stream(pods: Api<Pod>, pod: String, lp: LogParams) -> impl Stream<Item 
                 .boxed(),
             Err(e) => futures::stream::once(async move { Ok(Event::default().event("error").data(format!("logs unavailable: {e}"))) }).boxed(),
         })
+}
+
+// ---------------------------------------------------------------------------
+// Servers of other setups (remotes that offer a log and console)
+// ---------------------------------------------------------------------------
+
+async fn remote_server(st: &St, source: &str, name: &str) -> Option<crate::api::Summary> {
+    let (servers, _) = crate::api::remote_servers(st).await;
+    servers.into_iter().find(|s| s.source == source && s.name == name)
+}
+
+/// Where a remote server's `logs` or `command` endpoint is, if that server exists and offers one.
+async fn remote_target(st: &St, source: &str, name: &str, what: &str) -> anyhow::Result<(String, String)> {
+    let server = remote_server(st, source, name).await.ok_or_else(|| anyhow::anyhow!("{source} has no server named {name}"))?;
+    if !server.console {
+        anyhow::bail!("{source} doesn't offer a console for {name}");
+    }
+    crate::api::remote_endpoint(st, source, name, what).ok_or_else(|| anyhow::anyhow!("no token configured for {source}"))
+}
+
+pub async fn remote_page(st: St, Extension(me): Extension<Identity>, Path((source, name)): Path<(String, String)>) -> Response {
+    match remote_server(&st, &source, &name).await {
+        Some(s) => html(views::remote_detail(&me, &s)),
+        None => {
+            let msg = format!("{source} has no server named {name} (or {source} can't be reached right now)");
+            (StatusCode::NOT_FOUND, Html(views::error_page(&msg).into_string())).into_response()
+        }
+    }
+}
+
+pub async fn remote_console(st: St, Path((source, name)): Path<(String, String)>, Form(f): Form<ConsoleForm>) -> Response {
+    let run = async {
+        let (url, token) = remote_target(&st, &source, &name, "command").await?;
+        let command = f.command.trim().trim_start_matches('/').to_string();
+        let resp = st.http.client.post(&url).bearer_auth(token).timeout(std::time::Duration::from_secs(30)).body(command).send().await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("{source} answered HTTP {status}: {}", text.chars().take(300).collect::<String>());
+        }
+        anyhow::Ok(strip_formatting(&text))
+    };
+    match run.await {
+        Ok(out) if out.trim().is_empty() => "(no output)".into_response(),
+        Ok(out) => out.into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("console error: {e:#}")).into_response(),
+    }
+}
+
+/// A remote server's log as SSE. Unlike a pod's log, the stream always finishes with an `end`
+/// event, so the page stops instead of reconnecting (and replaying the tail) every few seconds
+/// while the server is down.
+pub async fn remote_logs(st: St, Path((source, name)): Path<(String, String)>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let open = async move {
+        let (url, token) = remote_target(&st, &source, &name, "logs").await?;
+        let tail = site::get().console.tail_lines.clamp(0, 5000);
+        // The client's default timeout covers the whole response; a followed log has no end.
+        let resp = st.http.client.get(format!("{url}?tail={tail}")).bearer_auth(token).timeout(std::time::Duration::from_secs(7 * 86400)).send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!("{source} answered HTTP {status}: {}", resp.text().await.unwrap_or_default().chars().take(300).collect::<String>());
+        }
+        anyhow::Ok(resp)
+    };
+    let stream = futures::stream::once(open)
+        .flat_map(|r| match r {
+            Ok(resp) => resp
+                .bytes_stream()
+                .map_err(std::io::Error::other)
+                .into_async_read()
+                .lines()
+                .map(|l| Ok(Event::default().data(l.unwrap_or_else(|e| format!("[log error: {e}]")))))
+                .boxed(),
+            Err(e) => futures::stream::once(async move { Ok(Event::default().event("error").data(format!("logs unavailable: {e:#}"))) }).boxed(),
+        })
+        .chain(futures::stream::once(async { Ok(Event::default().event("end").data("end")) }));
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 // ---------------------------------------------------------------------------

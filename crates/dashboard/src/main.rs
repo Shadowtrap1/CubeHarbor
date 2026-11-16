@@ -53,6 +53,10 @@ pub struct Config {
     /// server list (games-dashboard `/api/servers` or another cubeharbor's `/api/v1/servers`).
     #[arg(long, env = "REMOTES", default_value = "")]
     pub remotes: String,
+    /// Tokens for remotes that offer logs and a console (the cubeharbor docker agent):
+    /// `name=token,...`, sent to that remote as `Authorization: Bearer`.
+    #[arg(long, env = "REMOTE_TOKENS", default_value = "", hide_env_values = true)]
+    pub remote_tokens: String,
     /// Origins allowed to call /api from a browser (comma separated, `*` for any).
     #[arg(long, env = "CORS_ORIGINS", default_value = "")]
     pub cors_origins: String,
@@ -98,6 +102,7 @@ pub struct AppState {
     pub http: Http,
     pub cfg: Config,
     pub remotes: Vec<(String, String)>,
+    pub remote_tokens: HashMap<String, String>,
     pub remote_cache: tokio::sync::Mutex<Option<api::RemoteCache>>,
     pub cors_origins: Vec<String>,
     pub users: Users,
@@ -344,6 +349,7 @@ fn new_state(cfg: &Config, client: Client, users: Users) -> Result<AppState> {
         failures: Mutex::new(Failures::new(cfg.login_max_failures_total)),
         trusted_proxies: cidr::parse_list(&cfg.trusted_proxies)?,
         remotes: api::parse_remotes(&cfg.remotes),
+        remote_tokens: api::parse_remotes(&cfg.remote_tokens).into_iter().collect(),
         remote_cache: tokio::sync::Mutex::new(None),
         cors_origins: cfg.cors_origins.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(),
         cfg: cfg.clone(),
@@ -375,6 +381,9 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/servers/{ns}/{name}/console", post(console))
         .route("/servers/{ns}/{name}/logs", get(logs))
         .route("/servers/{ns}/{name}/compose.yaml", get(api::server_compose))
+        .route("/remotes/{source}/{name}", get(remote_page))
+        .route("/remotes/{source}/{name}/console", post(remote_console))
+        .route("/remotes/{source}/{name}/logs", get(remote_logs))
         .route("/compose/export", get(api::compose_export))
         .route("/api/servers", get(api_servers))
         .route("/api/compose", post(api_compose))
